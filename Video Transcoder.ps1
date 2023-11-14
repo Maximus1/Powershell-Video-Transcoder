@@ -26,6 +26,8 @@ $ffmpgexe = "$env:USERPROFILE\Documents\FFmpeg Batch AV Converter\ffmpeg.exe" #<
 $handbrakeexe = "$env:ProgramW6432\HandBrake\HandBrakeCLI.exe" #<---- Your path to Handbrakecli
 $textoutput = "$env:USERPROFILE\Desktop\test.txt" #<---- Your path to Textfile
 $waitprocess = 10
+$warteffmpeg = 0
+$wartehb = 0
 $i = 0
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -51,11 +53,12 @@ function Check-Series
 #Set maximum Procecces
 Function Variable-Instanzen
 {
-  $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
+  $script:zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
+  $script:zahlffmpg = (Get-Process -Name 'FFmpeg*').count
   $Auslastung = (Get-WmiObject -Class win32_processor | Measure-Object -Property LoadPercentage -Average).Average
   Write-Host -Object "Auslastung : $Auslastung"
   Write-Host -Object "Handbrakeinstanzen : $zahlhandb"
-  if ($zahlhandb -lt $zahlhandbmax -and $Auslastung -lt 50)
+  if ($zahlhandb -lt 2 -and $Auslastung -lt 50)
   {
     $script:zahlffmpgmax = 10
     $script:zahlhandbmax = 2
@@ -109,10 +112,16 @@ function FFmpeg-Encode
   {
     while ($zahlffmpg -ge $zahlffmpgmax -or $Auslastung -ge 50)
     {
-      Write-Host -Object "warte für $waitprocess sekunden"
+      if ($warteffmpeg -lt 1)
+      {
+        Write-Host -Object 'warte auf FFmpeg'
+        $warteffmpeg = 1
+      }
+      
       Start-Sleep -Seconds $waitprocess
       $zahlffmpg = (Get-Process -Name 'FFmpeg*').count
     }
+    $warteffmpeg = 0
     Start-Process  -FilePath $ffmpgexe -ArgumentList  "-i `"$oldfile`" -c:v copy -c:a aac -ab `"$aacbitrate`" -ar `"$aachz`" -filter:a loudnorm `"$newfile`""
     Write-Oldfileitem
   }
@@ -141,10 +150,15 @@ function Handbrake-Encoderfull
   {
     while ($zahlhandb -ge $zahlhandbmax -or $Auslastung -ge 50)
     {
-      Write-Host -Object "warte für $waitprocess sekunden"
+      if ($wartehb -lt 1)
+      {
+        Write-Host -Object 'warte auf Handbrake'
+        $wartehb = 1
+      }
       Start-Sleep -Seconds $waitprocess
       $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
     }
+    $wartehb = 0
     Check-Series
     if($series720p -eq 0)
     {
@@ -201,7 +215,7 @@ function Handbrake-Encoderaudiocopy
 }
 #endregion functions
 Clear-Host
-start-sleep -m 250
+start-sleep -Milliseconds 50
 $PickFolder = New-Object -TypeName System.Windows.Forms.OpenFileDialog
 $PickFolder.FileName = 'Mediafolder'
 $PickFolder.Filter = 'Folder Selection|*.*'
@@ -261,7 +275,7 @@ ForEach ($file in $filelist)
   Variable-Instanzen
   #region begin Write host
   Clear-Host
-  start-sleep -m 250
+  start-sleep -Milliseconds 50
   Write-Host -Object -Filestats---------------------------------------------------------------------
   Write-Host -Object "MKV Batch Encoding File $i of $filecount - $progress%"
   Write-Host -Object "Processing : $oldfile" 
