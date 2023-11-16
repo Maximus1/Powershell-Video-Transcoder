@@ -255,7 +255,7 @@ Function Newfile-check
  {
    Try
    {
-     if([IO.File]::Exists($oldfile) -AND [IO.File]::Exists($newfile)) 
+     if([IO.File]::Exists($oldfile) -AND [IO.File]::Exists($newfile))
      {
        Write-Host -Object 'beide da'
        Write-Host -Object "$oldfile"
