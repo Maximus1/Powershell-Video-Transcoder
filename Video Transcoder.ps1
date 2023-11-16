@@ -82,7 +82,6 @@ function Newfile-Vorhanden
   {
     Write-Host -Object 'File already converted' -ForegroundColor Green
     #Start-Sleep -Seconds 2
-    Newfile-check
     Filesize-Check
     Get-Audiocount
     Compare-videolength
@@ -254,12 +253,20 @@ Function Format-FileSize()
  #Suche nach MKV Dateien
 Function Newfile-check
  {
-  if([IO.File]::Exists($oldfile) -AND [IO.File]::Exists($newfile))
+   Try
    {
-     Write-Host -Object 'beide da'
-     Write-Host -Object "$oldfile"
-     Write-Host -Object "$newfile"
+     if([IO.File]::Exists($oldfile) -AND [IO.File]::Exists($newfile)) 
+     {
+       Write-Host -Object 'beide da'
+       Write-Host -Object "$oldfile"
+       Write-Host -Object "$newfile"
+     }
    }
+   Catch
+   {
+   Write-Host -Object $newfile 'existiert nicht'
+   }
+   
  }
  #Check for Filesize of oldfile and newfile
 Function Filesize-Check
@@ -452,10 +459,6 @@ if($result -eq [Windows.Forms.DialogResult]::OK)
     {
       if($series720p -eq 0)
       {
-        Newfile-check
-        Filesize-Check
-        Get-Audiocount
-        Compare-videolength
         Get-newnfofile
         Remove-newmedia
         continue
@@ -466,6 +469,12 @@ if($result -eq [Windows.Forms.DialogResult]::OK)
         $handbrakeaudiocodec = 'copy'
         check-ignore
         Handbrake-Encoderaudiocopy
+        Newfile-check
+        Filesize-Check
+        Get-Audiocount
+        Compare-videolength
+        Get-newnfofile
+        Remove-newmedia
         continue
       }    
     }
