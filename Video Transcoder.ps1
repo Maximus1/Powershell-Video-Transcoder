@@ -8,10 +8,9 @@ ${audio-codec-bitrate-128} = '128k'
 ${hb-audiocodec} = 'av_aac'
 ${video-codec-hevc} = 'HEVC'
 ${audio-codec-aac} = 'AAC'
-${akt-action-s} = 'Skipping'
-${akt-action-p} = 'Processing'
 ${Languages-audio-video} = 'ger,deu,de,und,,'
 $extensions = @('*.mkv', '*.mp4', '*.avi')
+$zielextension = '.mkv'
 $seriessessonfolder = '*Staffel*'# Your naming for Seasons comes here. !!don´t remove the stars!!
 $series720p = 0
 $zahlffmpg = 0
@@ -28,6 +27,7 @@ $textoutput = "$env:USERPROFILE\Desktop\test.txt" #<---- Your path to Textfile
 $waitprocess = 10
 $warteffmpeg = 0
 $wartehb = 0
+$newfile =
 $i = 0
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -38,7 +38,7 @@ function Check-Series
   if ($file.DirectoryName -like $seriessessonfolder) 
   {
     Write-Host -Object 'Ist Serie'
-    if ($videoresH -ge 720)
+    if ($videoresH -gt 720)
     {
       Write-Host -Object 'auflösung ist größer als 720P'
       $script:series720p = [int]1
@@ -46,8 +46,13 @@ function Check-Series
     if($videoresH -le 720)
     {
       Write-Host -Object 'auflösung ist 720P oder kleiner'
-      $script:series720p = 0
+      $script:series720p = [int]0
     }
+  }
+  elseif($file.DirectoryName -notlike $seriessessonfolder)
+  {
+    Write-Host -Object 'Ist keine Serie'
+    $script:series720p = [int]0
   }
 }
 #Set maximum Procecces
@@ -55,15 +60,15 @@ Function Variable-Instanzen
 {
   $script:zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
   $script:zahlffmpg = (Get-Process -Name 'FFmpeg*').count
-  $Auslastung = (Get-WmiObject -Class win32_processor | Measure-Object -Property LoadPercentage -Average).Average
+  $script:Auslastung = (Get-WmiObject -Class win32_processor | Measure-Object -Property LoadPercentage -Average).Average
   Write-Host -Object "Auslastung : $Auslastung"
   Write-Host -Object "Handbrakeinstanzen : $zahlhandb"
-  if ($zahlhandb -lt 2 -and $Auslastung -lt 50)
+  if ($zahlhandb -lt 2 -and $Auslastung -lt 75)
   {
     $script:zahlffmpgmax = 10
     $script:zahlhandbmax = 2
   }
-  if ($zahlhandb -eq 1 -and $Auslastung -ge 50)
+  if ($zahlhandb -eq 1 -and $Auslastung -ge 75)
   {
     $script:zahlffmpgmax = 5
     $script:zahlhandbmax = 1
@@ -77,6 +82,12 @@ function Newfile-Vorhanden
   {
     Write-Host -Object 'File already converted' -ForegroundColor Green
     #Start-Sleep -Seconds 2
+    Newfile-check
+    Filesize-Check
+    Get-Audiocount
+    Compare-videolength
+    Get-newnfofile
+    Remove-newmedia
     continue
   }
 }
@@ -134,7 +145,6 @@ function Handbrake-Encoderfull
   if ($zahlhandb -lt $zahlhandbmax -and $Auslastung -lt 50)
   {
     Write-Host -Object "$zahlhandb / $zahlhandbmax"
-    Check-Series
     if($series720p -eq 0)
     {
       Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" --normalize-mix `"$handbrakenormalize`" -i `"$oldfile`" -o `"$newfile`""
@@ -159,7 +169,6 @@ function Handbrake-Encoderfull
       $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
     }
     $wartehb = 0
-    Check-Series
     if($series720p -eq 0)
     {
       Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" --normalize-mix `"$handbrakenormalize`" -i `"$oldfile`" -o `"$newfile`""
@@ -180,7 +189,6 @@ function Handbrake-Encoderaudiocopy
   if ($zahlhandb -lt $zahlhandbmax -and $Auslastung -lt 50)
   {
     Write-Host -Object "$zahlhandb / $zahlhandbmax"
-    Check-Series
     if($series720p -eq [int]0)
     {
       Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle  -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
@@ -200,7 +208,6 @@ function Handbrake-Encoderaudiocopy
       Start-Sleep -Seconds $waitprocess
       $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
     }
-    Check-Series
     if($series720p -eq 0)
     {
       Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium --vfr -A `"$HBHWDec`" --quality 22 --subtitle-lang-list `"$subtitlelanglist`"  --audio-lang-list `"$audiotitlelanglist`" --first-subtitle -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
@@ -213,6 +220,148 @@ function Handbrake-Encoderaudiocopy
     }
   }
 }
+
+#Filesize conversion
+Function Format-FileSize() 
+{
+  Param ([Parameter(Mandatory)][long]$size)
+  If ($size -gt 1TB) 
+  {
+    [string]::Format('{0:0.00} TB', $size / 1TB)
+  }
+  ElseIf ($size -gt 1GB) 
+  {
+    [string]::Format('{0:0.00} GB', $size / 1GB)
+  }
+  ElseIf ($size -gt 1MB) 
+  {
+    [string]::Format('{0:0.00} MB', $size / 1MB)
+  }
+  ElseIf ($size -gt 1KB) 
+  {
+    [string]::Format('{0:0.00} kB', $size / 1KB)
+  }
+  ElseIf ($size -gt 0) 
+  {
+    [string]::Format('{0:0.00} B', $size)
+  }
+  Else 
+  {
+    ''
+  }
+}
+
+ #Suche nach MKV Dateien
+Function Newfile-check
+ {
+  if([IO.File]::Exists($oldfile) -AND [IO.File]::Exists($newfile))
+   {
+     Write-Host -Object 'beide da'
+     Write-Host -Object "$oldfile"
+     Write-Host -Object "$newfile"
+   }
+ }
+ #Check for Filesize of oldfile and newfile
+Function Filesize-Check
+ {
+   if ($oldfile -like '*.mkv*' -or $oldfile -like '*.mp4*' -or $oldfile -like '*.avi*')
+   {
+     $sizeold = Format-FileSize -size ((Get-Item -Path $oldfile).length)
+     $sizenew = Format-FileSize -size ((Get-Item -Path $newfile).length)
+     Write-Host 'Größe Alt':($sizeold)
+     Write-Host 'Größe Neu':($sizenew)
+   }
+ }
+function Get-Audiocount
+{
+  $audiocountnew = (Get-MediaInfoValue -Path $newfile -Kind General -Parameter 'AudioCount')
+  if ($audiocountnew -lt '1')
+  {
+    Write-Host "Keine Audiospur gefunden in :($newfile)"
+    Remove-Item -LiteralPath $newfile -Confirm:$false -Verbose
+    continue
+  }
+}
+       
+function Compare-videolength
+{
+  $videodaueralt = (Get-MediaInfoValue -Path $oldfile -Kind General -Parameter 'Duration')
+  $videodaueraltminuten = [math]::Floor($videodaueralt/60000)
+  Write-Host -Object "Dauer Alt : $videodaueralt / $videodaueraltminuten"
+  [string]$videodauerneu = Get-MediaInfoValue -Path $newfile -Kind General -Parameter 'Duration'
+  $videodauerneuminuten = [math]::Floor($videodauerneu/60000)
+  Write-Host -Object "Dauer Neu : $videodauerneu / $videodauerneuminuten"
+  if($videodaueraltminuten -eq $videodauerneuminuten) 
+  {
+    Remove-Item -LiteralPath $oldfile -Confirm:$false -Verbose
+    Rename-Item -LiteralPath $newfile -NewName $newfilerename -Confirm:$false -Verbose
+  }
+  else
+  {
+    Write-Host -Object "Länge unterschiedlich : $videodaueraltminuten / $videodauerneuminuten" -ForegroundColor Red
+    Start-Sleep -Seconds 2
+    continue
+  }
+}
+
+function Get-newnfofile
+{
+  if([IO.File]::Exists($oldfilenfo) -AND [IO.File]::Exists($newfilenfo))
+  {
+    Write-Host -Object 'beide da'
+    Write-Host -Object "$oldfilenfo"
+    Write-Host -Object "$newfilenfo"
+    
+    #Wenn .nfo im namen vorhanden        
+    if ($oldfilenfo -like '*.nfo*')
+    {
+      Write-Host -Object 'ist nfo'
+      Remove-Item -LiteralPath $oldfilenfo -Confirm:$false -Verbose
+      Rename-Item -LiteralPath $newfilenfo -NewName $oldfilenfo -Confirm:$false -Verbose
+    }
+  }
+}
+
+function Remove-newmedia
+{
+  if([IO.File]::Exists($newfilebildneuclearlogopng))
+  {
+    Remove-Item -LiteralPath $newfilebildneuclearlogopng -Confirm:$false -Verbose
+  }
+  if([IO.File]::Exists($newfilebildneufanartjpg)) 
+  {
+    Remove-Item -LiteralPath $newfilebildneufanartjpg -Confirm:$false -Verbose
+  }
+  if([IO.File]::Exists($newfilebildneuposterjpg)) 
+  {
+    Remove-Item -LiteralPath $newfilebildneuposterjpg -Confirm:$false -Verbose
+  }
+  if([IO.File]::Exists($newfilebildneudiscartpng)) 
+  {
+    Remove-Item -LiteralPath $newfilebildneudiscartpng -Confirm:$false -Verbose
+  }
+  if([IO.File]::Exists($newfilebildneulandscapejpg)) 
+  {
+    Remove-Item -LiteralPath $newfilebildneulandscapejpg -Confirm:$false -Verbose
+  }
+  if([IO.File]::Exists($newfilebildneubannerjpg)) 
+  {
+    Remove-Item -LiteralPath $newfilebildneubannerjpg -Confirm:$false -Verbose
+  }
+  if([IO.File]::Exists($newfilebildneuclearartpng)) 
+  {
+    Remove-Item -LiteralPath $newfilebildneuclearartpng -Confirm:$false -Verbose
+  }
+  if([IO.File]::Exists($newfilebildneuthumbjpg)) 
+  {
+    Remove-Item -LiteralPath $newfilebildneuthumbjpg -Confirm:$false -Verbose
+  }
+  if([IO.File]::Exists($ignorefile))
+  {
+    Remove-Item -LiteralPath $ignorefile -force -confirm:$false -Verbose
+  }
+}
+
 #endregion functions
 Clear-Host
 start-sleep -Milliseconds 50
@@ -237,117 +386,142 @@ if($result -eq [Windows.Forms.DialogResult]::OK)
   $filelist = Get-ChildItem -Path "$destFolder" -Include $extensions -Recurse
   $num = $filelist | Measure-Object
   $filecount = $num.count
-}
-
-else 
-{
-  Write-Host -Object 'File Save Dialog Canceled' -ForegroundColor Yellow
-}
 
 
-ForEach ($file in $filelist)
-{
-  $i++
-  $processing = ${akt-action-p}
-  #region begin Files
-  $oldfile = $file.DirectoryName + '\' + $file.BaseName + $file.Extension
-  $newfile = $file.DirectoryName + '\' + $file.BaseName + '.neu' + '.mkv' #$file.Extension #replace $file.Extension with '.mkv' to make every vo
-  $ignorefilepath = $file.DirectoryName + '\'
-  $ignorefile = $file.DirectoryName + '\' + '.ignore'
-  $progress = ($i / $filecount) * 100
-  $progress = [Math]::Round($progress,2)
-  #endregion Files
-  #region begin getting Mediainfo
-  $audioformat = Get-MediaInfoValue -Path $oldfile -Kind Audio -Parameter 'Format'
-  $videoformat = Get-MediaInfoValue -Path $oldfile -Kind Video -Parameter 'Format'
-  if ($audioformat -eq ${audio-codec-aac} -AND $videoformat -eq ${video-codec-hevc})
-  {$processing = ${akt-action-s}}
-  [Int]$audiochanels = Get-MediaInfoValue -Path $oldfile -Kind Audio -Parameter 'Channel(s)'
-  [Int]$audiocount = Get-MediaInfoValue -Path $oldfile -Kind General -Parameter 'AudioCount'
-  $videodauer = Get-MediaInfoValue -Path $oldfile -Kind General -Parameter 'Duration'
-  [Int]$videoresW = Get-MediaInfoValue -Path $oldfile -Kind 'Video' -Parameter 'Width'
-  [Int]$videoresH = Get-MediaInfoValue -Path $oldfile -Kind 'Video' -Parameter 'Height'
-  $videodauerminuten = [math]::Floor($videodauer/60000)
-  #$outpufile_vorhanden = Test-Path -Path $newfile
-  #endregion getting Mediainfo
+
+  ForEach ($file in $filelist)
+  {
+    $i++
+    #region begin Files
+    $oldfile = $file.DirectoryName + '\' + $file.BaseName + $file.Extension
+    if($oldfile -eq $newfile) #$newfile from loop before
+    {
+      continue
+    }
+    $newfile = $file.DirectoryName + '\' + $file.BaseName + '.neu' + $zielextension
+    $newfilerename = $file.DirectoryName + '\' + $file.BaseName + $zielextension
+    $ignorefilepath = $file.DirectoryName + '\'
+    $ignorefile = $file.DirectoryName + '\' + '.ignore'
+    $oldfilenfo = $file.DirectoryName + '\' + $file.BaseName + '.nfo'
+    $newfilenfo = $file.DirectoryName + '\' + $file.BaseName + '.neu' + '.nfo'
+    $newfilebildneuclearlogopng = $file.DirectoryName + '\' + $file.BaseName + '.neu-clearlogo.png'
+    $newfilebildneufanartjpg = $file.DirectoryName + '\' + $file.BaseName + '.neu-fanart.jpg'
+    $newfilebildneuposterjpg = $file.DirectoryName + '\' + $file.BaseName + '.neu-poster.jpg'
+    $newfilebildneudiscartpng = $file.DirectoryName + '\' + $file.BaseName + '.neu-discart.png'
+    $newfilebildneuthumbjpg = $file.DirectoryName + '\' + $file.BaseName + '.neu-thumb.jpg'
+    $newfilebildneulandscapejpg = $file.DirectoryName + '\' + $file.BaseName + '.neu-landscape.jpg'
+    $newfilebildneubannerjpg = $file.DirectoryName + '\' + $file.BaseName + '.neu-banner.jpg'
+    $newfilebildneuclearartpng = $file.DirectoryName + '\' + $file.BaseName + '.neu-clearart.png'
+    $progress = ($i / $filecount) * 100
+    $progress = [Math]::Round($progress,2)
+    #endregion Files
+    #region begin getting Mediainfo
+    $audioformat = Get-MediaInfoValue -Path $oldfile -Kind Audio -Parameter 'Format'
+    $videoformat = Get-MediaInfoValue -Path $oldfile -Kind Video -Parameter 'Format'
+    [Int]$audiochanels = Get-MediaInfoValue -Path $oldfile -Kind Audio -Parameter 'Channel(s)'
+    [Int]$audiocount = Get-MediaInfoValue -Path $oldfile -Kind General -Parameter 'AudioCount'
+    $videodauer = Get-MediaInfoValue -Path $oldfile -Kind General -Parameter 'Duration'
+    [Int]$videoresW = Get-MediaInfoValue -Path $oldfile -Kind 'Video' -Parameter 'Width'
+    [Int]$videoresH = Get-MediaInfoValue -Path $oldfile -Kind 'Video' -Parameter 'Height'
+    $videodauerminuten = [math]::Floor($videodauer/60000)
+    #$outpufile_vorhanden = Test-Path -Path $newfile
+    #endregion getting Mediainfo
 
     
-  Variable-Instanzen
-  #region begin Write host
-  Clear-Host
-  start-sleep -Milliseconds 50
-  Write-Host -Object -Filestats---------------------------------------------------------------------
-  Write-Host -Object "MKV Batch Encoding File $i of $filecount - $progress%"
-  Write-Host -Object "Processing : $oldfile" 
-  Write-Host -Object "Audiocount / Format / Channels : $audiocount / $audioformat / $audiochanels"
-  Write-Host -Object "Videoformat / Resolution : $videoformat / $videoresW : $videoresH"
-  Write-Host -Object "VideoLaufzeit : $videodauer / $videodauerminuten"
-  Write-Host -Object -Jobs--------------------------------------------------------------------------
-  Write-Host -Object "FFMPEG Instanzen : $zahlffmpg / $zahlffmpgmax"
-  Write-Host -Object "Handbrake Instanzen : $zahlhandb / $zahlhandbmax"
-  Write-Host -Object -Step--------------------------------------------------------------------------
-  If ($processing -eq ${akt-action-s})
-  {
-    Write-Host -Object "$processing" -ForegroundColor Red
-  } 
-  If ($processing -eq ${akt-action-p})
-  {
-    Write-Host -Object "$processing" -ForegroundColor Green
-  }
-  #endregion Write host
-  Newfile-Vorhanden
+    Variable-Instanzen
 
-  #ist AAC und ist HEVC
-  if ($audioformat -eq ${audio-codec-aac} -AND $videoformat -eq ${video-codec-hevc})
-  {continue}
+    #region begin Write host
+    Clear-Host
+    start-sleep -Milliseconds 50
+    Write-Host -Object -Filestats---------------------------------------------------------------------
+    Write-Host -Object "MKV Batch Encoding File $i of $filecount - $progress%"
+    Write-Host -Object "Processing : $oldfile" 
+    Write-Host -Object "Audiocount / Format / Channels : $audiocount / $audioformat / $audiochanels"
+    Write-Host -Object "Videoformat / Resolution : $videoformat / $videoresW : $videoresH"
+    Write-Host -Object "VideoLaufzeit : $videodauer / $videodauerminuten"
+    Write-Host -Object -Jobs--------------------------------------------------------------------------
+    Write-Host -Object "FFMPEG Instanzen : $zahlffmpg / $zahlffmpgmax"
+    Write-Host -Object "Handbrake Instanzen : $zahlhandb / $zahlhandbmax"
+    Write-Host -Object -Step--------------------------------------------------------------------------
+    #endregion Write host
+    Newfile-Vorhanden
+    Check-Series
 
-  #kein AAC aber HEVC - FFMPEG
-  if ($audioformat -NE ${audio-codec-aac} -AND $videoformat -eq ${video-codec-hevc})
-  {
-    #Suround
-    if($audiochanels -gt '3')
+    #ist AAC und ist HEVC
+    if ($audioformat -eq ${audio-codec-aac} -AND $videoformat -eq ${video-codec-hevc})
     {
-      $aacbitrate = ${audio-codec-bitrate-256}
-      $aachz = '48000'
-      Write-Host -Object 'FFMPEG Surround copy Video'
-      check-ignore
-      FFmpeg-Encode
+      if($series720p -eq 0)
+      {
+        Newfile-check
+        Filesize-Check
+        Get-Audiocount
+        Compare-videolength
+        Get-newnfofile
+        Remove-newmedia
+        continue
+      }
+      if($series720p -eq 1)
+      {
+        Write-Host -Object 'Handbrake copy audio - Scale to 720P'
+        $handbrakeaudiocodec = 'copy'
+        check-ignore
+        Handbrake-Encoderaudiocopy
+        continue
+      }    
     }
-    #stereo oder mono
-    if($audiochanels -lt '3')
-    {
-      $aacbitrate = ${audio-codec-bitrate-128}
-      $aachz = '44100'
-      Write-Host -Object 'FFMPEG Stereo copy Video'
-      check-ignore
-      FFmpeg-Encode
-    }
-  }
+  
 
-  #kein AAC und kein HEVC - Handbrake
-  if ($audioformat -NE ${audio-codec-aac} -AND $videoformat -NE ${video-codec-hevc})
-  {
-    #Suround
-    if($audiochanels -gt '3')
+    #kein AAC aber HEVC - FFMPEG
+    if ($audioformat -NE ${audio-codec-aac} -AND $videoformat -eq ${video-codec-hevc})
     {
-      $handbrakeaudiocodec = ${hb-audiocodec}
-      $handbrakeaudiobitrate = ${audio-codec-bitrate-256}
-      $handbrakenormalize = '1'
-      $hbmixdown = '5point1'
-      Write-Host -Object 'Handbrake Surround full convert'
-      check-ignore
-      Handbrake-Encoderfull
+      #Suround
+      if($audiochanels -gt '3')
+      {
+        $aacbitrate = ${audio-codec-bitrate-256}
+        $aachz = '48000'
+        Write-Host -Object 'FFMPEG Surround copy Video'
+        check-ignore
+        FFmpeg-Encode
+        continue
+      }
+      #stereo oder mono
+      if($audiochanels -lt '3')
+      {
+        $aacbitrate = ${audio-codec-bitrate-128}
+        $aachz = '44100'
+        Write-Host -Object 'FFMPEG Stereo copy Video'
+        check-ignore
+        FFmpeg-Encode
+        continue
+      }
     }
-    #stereo oder mono
-    if($audiochanels -lt '3')
+
+    #kein AAC und kein HEVC - Handbrake
+    if ($audioformat -NE ${audio-codec-aac} -AND $videoformat -NE ${video-codec-hevc})
     {
-      $handbrakeaudiocodec = ${hb-audiocodec}
-      $handbrakeaudiobitrate = ${audio-codec-bitrate-128}
-      $handbrakenormalize = '1'
-      $hbmixdown = 'stereo'
-      Write-Host -Object 'Handbrake Stereo full convert'
-      check-ignore
+      #Suround
+      if($audiochanels -gt '3')
+      {
+        $handbrakeaudiocodec = ${hb-audiocodec}
+        $handbrakeaudiobitrate = ${audio-codec-bitrate-256}
+        $handbrakenormalize = '1'
+        $hbmixdown = '5point1'
+        Write-Host -Object 'Handbrake Surround full convert'
+        check-ignore
         Handbrake-Encoderfull
+        continue
+      }
+      #stereo oder mono
+      if($audiochanels -lt '3')
+      {
+        $handbrakeaudiocodec = ${hb-audiocodec}
+        $handbrakeaudiobitrate = ${audio-codec-bitrate-128}
+        $handbrakenormalize = '1'
+        $hbmixdown = 'stereo'
+        Write-Host -Object 'Handbrake Stereo full convert'
+        check-ignore
+        Handbrake-Encoderfull
+        continue
       }
     }
 
@@ -358,5 +532,18 @@ ForEach ($file in $filelist)
       $handbrakeaudiocodec = 'copy'
       check-ignore
       Handbrake-Encoderaudiocopy
+      continue
     }
   }
+  Newfile-check
+  Filesize-Check
+  Get-Audiocount
+  Compare-videolength
+  Get-newnfofile
+  Remove-newmedia
+  }
+
+else 
+{
+  Write-Host -Object 'File Save Dialog Canceled' -ForegroundColor Yellow
+}
