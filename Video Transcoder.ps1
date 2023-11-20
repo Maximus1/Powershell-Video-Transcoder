@@ -214,11 +214,16 @@ try
     {
       while ($zahlhandb -ge $zahlhandbmax -or $Auslastung -ge 75)
       {
-        Write-Host -Object "warte für $waitprocess sekunden"
+        if ($wartehb -lt 1)
+        {
+          Write-Host -Object 'warte auf Handbrake'
+          $wartehb = 1
+        }
         Start-Sleep -Seconds $waitprocess
         $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
         Variable-Instanzen
       }
+      $wartehb = 0
       if($series720p -eq 0)
       {
         Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium --vfr -A `"$HBHWDec`" --quality 22 --subtitle-lang-list `"$subtitlelanglist`"  --audio-lang-list `"$audiotitlelanglist`" --first-subtitle -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
@@ -307,6 +312,7 @@ try
     else
     {
       Write-Host -Object "Länge unterschiedlich : $videodaueraltminuten / $videodauerneuminuten" -ForegroundColor Red
+      Remove-Item -LiteralPath $newfile -Confirm:$false -Verbose
       Start-Sleep -Seconds 2
       continue
     }
@@ -395,9 +401,7 @@ try
     $num = $filelist | Measure-Object
     $filecount = $num.count
 
-
-
-    ForEach ($file in $filelist)
+    ForEach ($file in $filelist) #transcode
     {
       $i++
       #region begin Files
@@ -434,7 +438,6 @@ try
       $videodauerminuten = [math]::Floor($videodauer/60000)
       #$outpufile_vorhanden = Test-Path -Path $newfile
       #endregion getting Mediainfo
-
     
       Variable-Instanzen
 
@@ -468,6 +471,7 @@ try
           $handbrakeaudiocodec = 'copy'
           check-ignore
           Handbrake-Encoderaudiocopy
+          
           continue
         }    
       }
@@ -484,6 +488,10 @@ try
           Write-Host -Object 'FFMPEG Surround copy Video'
           check-ignore
           FFmpeg-Encode
+          Get-Audiocount
+          Compare-videolength
+          Get-newnfofile
+          Remove-newmedia
           continue
         }
         #stereo oder mono
@@ -538,31 +546,85 @@ try
       }
     }
     Newfile-check
-    if ($oldfile -like '*.mkv*' -or $oldfile -like '*.mp4*' -or $oldfile -like '*.avi*')
-    {
-      $sizeold = Format-FileSize -size ((Get-Item -Path $oldfile).length)
-      Write-Host 'Größe Alt':($sizeold)
-      if([IO.File]::Exists($newfile))
-      {
-        $sizenew = Format-FileSize -size ((Get-Item -Path $newfile).length)
-        Write-Host 'Größe Neu':($sizenew)
-      }
-      else
-      {
-        Write-Host $newfile' nicht vorhanden'
-      
-      }
-    }
-    Get-Audiocount
-    Compare-videolength
-    Get-newnfofile
-    Remove-newmedia
+    
+    #if ($oldfile -like '*.mkv*' -or $oldfile -like '*.mp4*' -or $oldfile -like '*.avi*')
+    #{
+    #  $sizeold = Format-FileSize -size ((Get-Item -Path $oldfile).length)
+    #  Write-Host 'Größe Alt':($sizeold)
+    #  if([IO.File]::Exists($newfile))
+    #  {
+    #    $sizenew = Format-FileSize -size ((Get-Item -Path $newfile).length)
+    #    Write-Host 'Größe Neu':($sizenew)
+    #  }
+    #  else
+    #  {
+    #    Write-Host $newfile' nicht vorhanden'
+    #    continue      
+    #  }
+    #  
+    #}
+    #Get-Audiocount
+    #Compare-videolength
+    #Get-newnfofile
+    #Remove-newmedia
   }
-
   else 
   {
     Write-Host -Object 'File Save Dialog Canceled' -ForegroundColor Yellow
   }
+  
+  
+  ForEach ($file in $filelist) #transcode
+  {
+    $i++
+    #region begin Files
+    $oldfile = $file.DirectoryName + '\' + $file.BaseName + $file.Extension
+    if($oldfile -eq $newfile) #$newfile from loop before
+    {
+      continue
+    }
+    $newfile = $file.DirectoryName + '\' + $file.BaseName + '.neu' + $zielextension
+    $newfilerename = $file.DirectoryName + '\' + $file.BaseName + $zielextension
+    $ignorefilepath = $file.DirectoryName + '\'
+    $ignorefile = $file.DirectoryName + '\' + '.ignore'
+    $oldfilenfo = $file.DirectoryName + '\' + $file.BaseName + '.nfo'
+    $newfilenfo = $file.DirectoryName + '\' + $file.BaseName + '.neu' + '.nfo'
+    $newfilebildneuclearlogopng = $file.DirectoryName + '\' + $file.BaseName + '.neu-clearlogo.png'
+    $newfilebildneufanartjpg = $file.DirectoryName + '\' + $file.BaseName + '.neu-fanart.jpg'
+    $newfilebildneuposterjpg = $file.DirectoryName + '\' + $file.BaseName + '.neu-poster.jpg'
+    $newfilebildneudiscartpng = $file.DirectoryName + '\' + $file.BaseName + '.neu-discart.png'
+    $newfilebildneuthumbjpg = $file.DirectoryName + '\' + $file.BaseName + '.neu-thumb.jpg'
+    $newfilebildneulandscapejpg = $file.DirectoryName + '\' + $file.BaseName + '.neu-landscape.jpg'
+    $newfilebildneubannerjpg = $file.DirectoryName + '\' + $file.BaseName + '.neu-banner.jpg'
+    $newfilebildneuclearartpng = $file.DirectoryName + '\' + $file.BaseName + '.neu-clearart.png'
+    #endregion Files
+
+
+
+    Get-Audiocount
+    Compare-videolength
+    Get-newnfofile
+    Remove-newmedia
+
+  }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 }
 finally 
 {
