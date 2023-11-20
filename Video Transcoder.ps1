@@ -136,7 +136,6 @@ try
           Write-Host -Object 'warte auf FFmpeg'
           $warteffmpeg = 1
         }
-      
         Start-Sleep -Seconds $waitprocess
         $zahlffmpg = (Get-Process -Name 'FFmpeg*').count
       }
@@ -561,7 +560,7 @@ try
     #    Write-Host $newfile' nicht vorhanden'
     #    continue      
     #  }
-    #  
+    #
     #}
     #Get-Audiocount
     #Compare-videolength
