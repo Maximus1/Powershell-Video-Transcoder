@@ -1,6 +1,6 @@
 ﻿#requires -Version 3.0 -Modules Get-MediaInfo
 $existingVariables = Get-Variable
-try 
+try
 {
   ${encoder-preset} = 'medium'
   ${audio-codec-bitrate-256} = '256k'
@@ -35,7 +35,7 @@ try
   #If Season in Path set encoded video to 720p else use movie Settings
   function Check-Series
   {
-    if ($file.DirectoryName -like $seriessessonfolder) 
+    if ($file.DirectoryName -like $seriessessonfolder)
     {
       Write-Host -Object 'Ist Serie'
       if ($videoresH -gt 720)
@@ -81,7 +81,6 @@ try
     if([IO.File]::Exists($newfile))
     {
       Write-Host -Object 'File already converted' -ForegroundColor Green
-      #Start-Sleep -Seconds 2
       if ($oldfile -like '*.mkv*' -or $oldfile -like '*.mp4*' -or $oldfile -like '*.avi*')
       {
         $sizeold = (Get-Item -Path $oldfile).length
@@ -89,7 +88,7 @@ try
         $sizenew = Format-FileSize -size ((Get-Item -Path $newfile).length)
         Write-Host 'Größe Alt':($sizeold)
         Write-Host 'Größe Neu':($sizenew)
-      }   
+      }
       Get-Audiocount
       Compare-videolength
       Get-newnfofile
@@ -155,12 +154,12 @@ try
       if($series720p -eq [int]0)
       {
         Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" --normalize-mix `"$handbrakenormalize`" -i `"$oldfile`" -o `"$newfile`""
-        Write-Oldfileitem 
+        Write-Oldfileitem
       }
       if($series720p -eq [int]1)
       {
         Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" -l 720 --loose-anamorphic --keep-display-aspect --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" --normalize-mix `"$handbrakenormalize`" -i `"$oldfile`" -o `"$newfile`""
-        Write-Oldfileitem 
+        Write-Oldfileitem
       }
     }
     else
@@ -180,12 +179,12 @@ try
       if($series720p -eq 0)
       {
         Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" --normalize-mix `"$handbrakenormalize`" -i `"$oldfile`" -o `"$newfile`""
-        Write-Oldfileitem 
+        Write-Oldfileitem
       }
       if($series720p -eq 1)
       {
         Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" -l 720 --loose-anamorphic --keep-display-aspect --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" --normalize-mix `"$handbrakenormalize`" -i `"$oldfile`" -o `"$newfile`""
-        Write-Oldfileitem 
+        Write-Oldfileitem
       }
     }
   }
@@ -201,7 +200,7 @@ try
       if($series720p -eq [int]0)
       {
         Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle  -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
-        Write-Oldfileitem 
+        Write-Oldfileitem
       }
       if($series720p -eq [int]1)
       {
@@ -237,30 +236,30 @@ try
   }
 
   #Filesize conversion
-  Function Format-FileSize() 
+  Function Format-FileSize()
   {
     Param ([Parameter(Mandatory)][long]$size)
-    If ($size -gt 1TB) 
+    If ($size -gt 1TB)
     {
       [string]::Format('{0:0.00} TB', $size / 1TB)
     }
-    ElseIf ($size -gt 1GB) 
+    ElseIf ($size -gt 1GB)
     {
       [string]::Format('{0:0.00} GB', $size / 1GB)
     }
-    ElseIf ($size -gt 1MB) 
+    ElseIf ($size -gt 1MB)
     {
       [string]::Format('{0:0.00} MB', $size / 1MB)
     }
-    ElseIf ($size -gt 1KB) 
+    ElseIf ($size -gt 1KB)
     {
       [string]::Format('{0:0.00} kB', $size / 1KB)
     }
-    ElseIf ($size -gt 0) 
+    ElseIf ($size -gt 0)
     {
       [string]::Format('{0:0.00} B', $size)
     }
-    Else 
+    Else
     {
       ''
     }
@@ -303,7 +302,7 @@ try
     [string]$videodauerneu = Get-MediaInfoValue -Path $newfile -Kind General -Parameter 'Duration'
     $videodauerneuminuten = [math]::Floor($videodauerneu/60000)
     Write-Host -Object "Dauer Neu : $videodauerneu / $videodauerneuminuten"
-    if($videodaueraltminuten -eq $videodauerneuminuten) 
+    if($videodaueraltminuten -eq $videodauerneuminuten)
     {
       Remove-Item -LiteralPath $oldfile -Confirm:$false -Verbose
       Rename-Item -LiteralPath $newfile -NewName $newfilerename -Confirm:$false -Verbose
@@ -325,7 +324,7 @@ try
       Write-Host -Object "$oldfilenfo"
       Write-Host -Object "$newfilenfo"
     
-      #Wenn .nfo im namen vorhanden        
+      #Wenn .nfo im namen vorhanden
       if ($oldfilenfo -like '*.nfo*')
       {
         Write-Host -Object 'ist nfo'
@@ -341,31 +340,31 @@ try
     {
       Remove-Item -LiteralPath $newfilebildneuclearlogopng -Confirm:$false -Verbose
     }
-    if([IO.File]::Exists($newfilebildneufanartjpg)) 
+    if([IO.File]::Exists($newfilebildneufanartjpg))
     {
       Remove-Item -LiteralPath $newfilebildneufanartjpg -Confirm:$false -Verbose
     }
-    if([IO.File]::Exists($newfilebildneuposterjpg)) 
+    if([IO.File]::Exists($newfilebildneuposterjpg))
     {
       Remove-Item -LiteralPath $newfilebildneuposterjpg -Confirm:$false -Verbose
     }
-    if([IO.File]::Exists($newfilebildneudiscartpng)) 
+    if([IO.File]::Exists($newfilebildneudiscartpng))
     {
       Remove-Item -LiteralPath $newfilebildneudiscartpng -Confirm:$false -Verbose
     }
-    if([IO.File]::Exists($newfilebildneulandscapejpg)) 
+    if([IO.File]::Exists($newfilebildneulandscapejpg))
     {
       Remove-Item -LiteralPath $newfilebildneulandscapejpg -Confirm:$false -Verbose
     }
-    if([IO.File]::Exists($newfilebildneubannerjpg)) 
+    if([IO.File]::Exists($newfilebildneubannerjpg))
     {
       Remove-Item -LiteralPath $newfilebildneubannerjpg -Confirm:$false -Verbose
     }
-    if([IO.File]::Exists($newfilebildneuclearartpng)) 
+    if([IO.File]::Exists($newfilebildneuclearartpng))
     {
       Remove-Item -LiteralPath $newfilebildneuclearartpng -Confirm:$false -Verbose
     }
-    if([IO.File]::Exists($newfilebildneuthumbjpg)) 
+    if([IO.File]::Exists($newfilebildneuthumbjpg))
     {
       Remove-Item -LiteralPath $newfilebildneuthumbjpg -Confirm:$false -Verbose
     }
@@ -377,7 +376,6 @@ try
 
   #endregion functions
   Clear-Host
-  Start-Sleep -Milliseconds 50
   $PickFolder = New-Object -TypeName System.Windows.Forms.OpenFileDialog
   $PickFolder.FileName = 'Mediafolder'
   $PickFolder.Filter = 'Folder Selection|*.*'
@@ -390,7 +388,7 @@ try
   $PickFolder.ValidateNames = $false
 
   $result = $PickFolder.ShowDialog()
-  if($result -eq [Windows.Forms.DialogResult]::OK) 
+  if($result -eq [Windows.Forms.DialogResult]::OK)
   {
     $destFolder = Split-Path -Path $PickFolder.FileName
     Write-Host -Object "Selected Location: $destFolder" -ForegroundColor Green
@@ -435,14 +433,12 @@ try
       [Int]$videoresW = Get-MediaInfoValue -Path $oldfile -Kind 'Video' -Parameter 'Width'
       [Int]$videoresH = Get-MediaInfoValue -Path $oldfile -Kind 'Video' -Parameter 'Height'
       $videodauerminuten = [math]::Floor($videodauer/60000)
-      #$outpufile_vorhanden = Test-Path -Path $newfile
       #endregion getting Mediainfo
     
       Variable-Instanzen
 
       #region begin Write host
       Clear-Host
-      Start-Sleep -Milliseconds 50
       Write-Host -Object -Filestats---------------------------------------------------------------------
       Write-Host -Object "MKV Batch Encoding File $i of $filecount - $progress%"
       Write-Host -Object "Processing : $oldfile" 
@@ -470,12 +466,10 @@ try
           $handbrakeaudiocodec = 'copy'
           check-ignore
           Handbrake-Encoderaudiocopy
-          
           continue
-        }    
+        }
       }
   
-
       #kein AAC aber HEVC - FFMPEG
       if ($audioformat -NE ${audio-codec-aac} -AND $videoformat -eq ${video-codec-hevc})
       {
@@ -545,29 +539,8 @@ try
       }
     }
     Newfile-check
-    
-    #if ($oldfile -like '*.mkv*' -or $oldfile -like '*.mp4*' -or $oldfile -like '*.avi*')
-    #{
-    #  $sizeold = Format-FileSize -size ((Get-Item -Path $oldfile).length)
-    #  Write-Host 'Größe Alt':($sizeold)
-    #  if([IO.File]::Exists($newfile))
-    #  {
-    #    $sizenew = Format-FileSize -size ((Get-Item -Path $newfile).length)
-    #    Write-Host 'Größe Neu':($sizenew)
-    #  }
-    #  else
-    #  {
-    #    Write-Host $newfile' nicht vorhanden'
-    #    continue      
-    #  }
-    #
-    #}
-    #Get-Audiocount
-    #Compare-videolength
-    #Get-newnfofile
-    #Remove-newmedia
   }
-  else 
+  else
   {
     Write-Host -Object 'File Save Dialog Canceled' -ForegroundColor Yellow
   }
@@ -598,13 +571,10 @@ try
     $newfilebildneuclearartpng = $file.DirectoryName + '\' + $file.BaseName + '.neu-clearart.png'
     #endregion Files
 
-
-
     Get-Audiocount
     Compare-videolength
     Get-newnfofile
     Remove-newmedia
-
   }
 
 
