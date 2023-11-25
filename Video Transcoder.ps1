@@ -29,6 +29,7 @@ try
   $wartehb = 0
   $newfile = ''
   $i = 0
+  $filelist =''
 
   Add-Type -AssemblyName System.Windows.Forms
   #region begin functions
@@ -115,124 +116,6 @@ try
   function Write-Oldfileitem 
   {
     "$oldfile" | Out-File -FilePath $textoutput -Append -Confirm:$false
-  }
-
-  #Encode Audio only with FFmpg
-  function FFmpeg-Encode
-  {
-    $zahlffmpg = (Get-Process -Name 'FFmpeg*').count
-    if ($zahlffmpg -lt $zahlffmpgmax )
-    {
-      Start-Process  -FilePath $ffmpgexe -ArgumentList  "-i `"$oldfile`" -c:v copy -c:a aac -ab `"$aacbitrate`" -ar `"$aachz`" -filter:a loudnorm `"$newfile`""
-      Write-Oldfileitem
-    }
-    else
-    {
-      while ($zahlffmpg -ge $zahlffmpgmax -or $Auslastung -ge 75)
-      {
-        if ($warteffmpeg -lt 1)
-        {
-          Write-Host -Object 'warte auf FFmpeg'
-          $warteffmpeg = 1
-        }
-        Start-Sleep -Seconds $waitprocess
-        $zahlffmpg = (Get-Process -Name 'FFmpeg*').count
-      }
-      $warteffmpeg = 0
-      Start-Process  -FilePath $ffmpgexe -ArgumentList  "-i `"$oldfile`" -c:v copy -c:a aac -ab `"$aacbitrate`" -ar `"$aachz`" -filter:a loudnorm `"$newfile`""
-      Write-Oldfileitem
-    }
-  }
-
-  #Encode Audio and Video wit HandbrakeCli
-  function Handbrake-Encoderfull
-  {
-    $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
-    if ($zahlhandb -lt $zahlhandbmax -and $Auslastung -lt 75)
-    {
-      Write-Host -Object "$zahlhandb / $zahlhandbmax"
-      if($series720p -eq [int]0)
-      {
-        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" --normalize-mix `"$handbrakenormalize`" -i `"$oldfile`" -o `"$newfile`""
-        Write-Oldfileitem
-      }
-      if($series720p -eq [int]1)
-      {
-        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" -l 720 --loose-anamorphic --keep-display-aspect --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" --normalize-mix `"$handbrakenormalize`" -i `"$oldfile`" -o `"$newfile`""
-        Write-Oldfileitem
-      }
-    }
-    else
-    {
-      while ($zahlhandb -ge $zahlhandbmax -or $Auslastung -ge 75)
-      {
-        if ($wartehb -lt 1)
-        {
-          Write-Host -Object 'warte auf Handbrake'
-          $wartehb = 1
-        }
-        Start-Sleep -Seconds $waitprocess
-        $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
-        Variable-Instanzen
-      }
-      $wartehb = 0
-      if($series720p -eq 0)
-      {
-        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" --normalize-mix `"$handbrakenormalize`" -i `"$oldfile`" -o `"$newfile`""
-        Write-Oldfileitem
-      }
-      if($series720p -eq 1)
-      {
-        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" -l 720 --loose-anamorphic --keep-display-aspect --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" --normalize-mix `"$handbrakenormalize`" -i `"$oldfile`" -o `"$newfile`""
-        Write-Oldfileitem
-      }
-    }
-  }
-
-  #Encode Video only with HandbrtakeCli
-  function Handbrake-Encoderaudiocopy
-  {
-    $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
-    Variable-Instanzen
-    if ($zahlhandb -lt $zahlhandbmax -and $Auslastung -lt 75)
-    {
-      Write-Host -Object "$zahlhandb / $zahlhandbmax"
-      if($series720p -eq [int]0)
-      {
-        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle  -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
-        Write-Oldfileitem
-      }
-      if($series720p -eq [int]1)
-      {
-        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium -l 720 --loose-anamorphic --keep-display-aspect --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle  -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
-        Write-Oldfileitem
-      }
-    }
-    else
-    {
-      while ($zahlhandb -ge $zahlhandbmax -or $Auslastung -ge 75)
-      {
-        if ($wartehb -lt 1)
-        {
-          Write-Host -Object 'warte auf Handbrake'
-          $wartehb = 1
-        }
-        Start-Sleep -Seconds $waitprocess
-        $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
-        Variable-Instanzen
-      }
-      $wartehb = 0
-      if($series720p -eq 0)
-      {
-        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium --vfr -A `"$HBHWDec`" --quality 22 --subtitle-lang-list `"$subtitlelanglist`"  --audio-lang-list `"$audiotitlelanglist`" --first-subtitle -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
-        Write-Oldfileitem
-      }
-      if($series720p -eq 1)
-      {
-        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium -l 720 --loose-anamorphic --keep-display-aspect --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle  -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
-        Write-Oldfileitem
-      }
-    }
   }
 
   #Filesize conversion
@@ -374,6 +257,125 @@ try
     }
   }
 
+  #Encode Audio only with FFmpg
+  function FFmpeg-Encode
+  {
+    $zahlffmpg = (Get-Process -Name 'FFmpeg*').count
+    if ($zahlffmpg -lt $zahlffmpgmax )
+    {
+      Start-Process  -FilePath $ffmpgexe -ArgumentList  "-i `"$oldfile`" -c:v copy -c:a aac -ab `"$aacbitrate`" -ar `"$aachz`" -filter:a loudnorm `"$newfile`""
+      Write-Oldfileitem
+    }
+    else
+    {
+      while ($zahlffmpg -ge $zahlffmpgmax -or $Auslastung -ge 75)
+      {
+        if ($warteffmpeg -lt 1)
+        {
+          Write-Host -Object 'warte auf FFmpeg'
+          $warteffmpeg = 1
+        }
+        Start-Sleep -Seconds $waitprocess
+        $zahlffmpg = (Get-Process -Name 'FFmpeg*').count
+        Variable-Instanzen
+      }
+      $warteffmpeg = 0
+      Start-Process  -FilePath $ffmpgexe -ArgumentList  "-i `"$oldfile`" -c:v copy -c:a aac -ab `"$aacbitrate`" -ar `"$aachz`" -filter:a loudnorm `"$newfile`""
+      Write-Oldfileitem
+    }
+  }
+
+  #Encode Audio and Video wit HandbrakeCli
+  function Handbrake-Encoderfull
+  {
+    $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
+    if ($zahlhandb -lt $zahlhandbmax -and $Auslastung -lt 75)
+    {
+      Write-Host -Object "$zahlhandb / $zahlhandbmax"
+      if($series720p -eq [int]0)
+      {
+        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" --normalize-mix `"$handbrakenormalize`" -i `"$oldfile`" -o `"$newfile`""
+        Write-Oldfileitem
+      }
+      if($series720p -eq [int]1)
+      {
+        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" -l 720 --loose-anamorphic --keep-display-aspect --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" --normalize-mix `"$handbrakenormalize`" -i `"$oldfile`" -o `"$newfile`""
+        Write-Oldfileitem
+      }
+    }
+    else
+    {
+      while ($zahlhandb -ge $zahlhandbmax -or $Auslastung -ge 75)
+      {
+        if ($wartehb -lt 1)
+        {
+          Write-Host -Object 'warte auf Handbrake'
+          $wartehb = 1
+        }
+        Start-Sleep -Seconds $waitprocess
+        $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
+        Variable-Instanzen
+      }
+      $wartehb = 0
+      if($series720p -eq 0)
+      {
+        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" --normalize-mix `"$handbrakenormalize`" -i `"$oldfile`" -o `"$newfile`""
+        Write-Oldfileitem
+      }
+      if($series720p -eq 1)
+      {
+        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" -l 720 --loose-anamorphic --keep-display-aspect --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" --normalize-mix `"$handbrakenormalize`" -i `"$oldfile`" -o `"$newfile`""
+        Write-Oldfileitem
+      }
+    }
+  }
+
+  #Encode Video only with HandbrtakeCli
+  function Handbrake-Encoderaudiocopy
+  {
+    $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
+    Variable-Instanzen
+    if ($zahlhandb -lt $zahlhandbmax -and $Auslastung -lt 75)
+    {
+      Write-Host -Object "$zahlhandb / $zahlhandbmax"
+      if($series720p -eq [int]0)
+      {
+        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle  -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
+        Write-Oldfileitem
+      }
+      if($series720p -eq [int]1)
+      {
+        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium -l 720 --loose-anamorphic --keep-display-aspect --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle  -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
+        Write-Oldfileitem
+      }
+    }
+    else
+    {
+      while ($zahlhandb -ge $zahlhandbmax -or $Auslastung -ge 75)
+      {
+        if ($wartehb -lt 1)
+        {
+          Write-Host -Object 'warte auf Handbrake'
+          $wartehb = 1
+        }
+        Start-Sleep -Seconds $waitprocess
+        $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
+        Variable-Instanzen
+      }
+      $wartehb = 0
+      if($series720p -eq 0)
+      {
+        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium --vfr -A `"$HBHWDec`" --quality 22 --subtitle-lang-list `"$subtitlelanglist`"  --audio-lang-list `"$audiotitlelanglist`" --first-subtitle -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
+        Write-Oldfileitem
+      }
+      if($series720p -eq 1)
+      {
+        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium -l 720 --loose-anamorphic --keep-display-aspect --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle  -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
+        Write-Oldfileitem
+      }
+    }
+  }
+
   #endregion functions
   Clear-Host
   $PickFolder = New-Object -TypeName System.Windows.Forms.OpenFileDialog
@@ -481,10 +483,7 @@ try
           Write-Host -Object 'FFMPEG Surround copy Video'
           check-ignore
           FFmpeg-Encode
-          Get-Audiocount
-          Compare-videolength
-          Get-newnfofile
-          Remove-newmedia
+
           continue
         }
         #stereo oder mono
