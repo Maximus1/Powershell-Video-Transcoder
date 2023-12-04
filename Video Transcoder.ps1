@@ -543,60 +543,8 @@ try
   {
     Write-Host -Object 'File Save Dialog Canceled' -ForegroundColor Yellow
   }
-  
-  
-  ForEach ($file in $filelist) #transcode
-  {
-    $i++
-    #region begin Files
-    $oldfile = $file.DirectoryName + '\' + $file.BaseName + $file.Extension
-    if($oldfile -eq $newfile) #$newfile from loop before
-    {
-      continue
-    }
-    $newfile = $file.DirectoryName + '\' + $file.BaseName + '.neu' + $zielextension
-    $newfilerename = $file.DirectoryName + '\' + $file.BaseName + $zielextension
-    $ignorefilepath = $file.DirectoryName + '\'
-    $ignorefile = $file.DirectoryName + '\' + '.ignore'
-    $oldfilenfo = $file.DirectoryName + '\' + $file.BaseName + '.nfo'
-    $newfilenfo = $file.DirectoryName + '\' + $file.BaseName + '.neu' + '.nfo'
-    $newfilebildneuclearlogopng = $file.DirectoryName + '\' + $file.BaseName + '.neu-clearlogo.png'
-    $newfilebildneufanartjpg = $file.DirectoryName + '\' + $file.BaseName + '.neu-fanart.jpg'
-    $newfilebildneuposterjpg = $file.DirectoryName + '\' + $file.BaseName + '.neu-poster.jpg'
-    $newfilebildneudiscartpng = $file.DirectoryName + '\' + $file.BaseName + '.neu-discart.png'
-    $newfilebildneuthumbjpg = $file.DirectoryName + '\' + $file.BaseName + '.neu-thumb.jpg'
-    $newfilebildneulandscapejpg = $file.DirectoryName + '\' + $file.BaseName + '.neu-landscape.jpg'
-    $newfilebildneubannerjpg = $file.DirectoryName + '\' + $file.BaseName + '.neu-banner.jpg'
-    $newfilebildneuclearartpng = $file.DirectoryName + '\' + $file.BaseName + '.neu-clearart.png'
-    #endregion Files
-
-    Get-Audiocount
-    Compare-videolength
-    Get-newnfofile
-    Remove-newmedia
-  }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 }
-finally 
-{
-  Get-Variable |
-  Where-Object -Property Name -NotIn -Value $existingVariables.Name |
-  Remove-Variable
-}
+finally
+{Get-Variable |Where-Object -Property Name -NotIn -Value $existingVariables.Name |Remove-Variable}
+  
+
