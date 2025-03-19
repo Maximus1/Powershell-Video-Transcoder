@@ -134,6 +134,7 @@ ForEach ($file in $filelist)
       {
         Write-Host -Object "Länge unterschiedlich : $videodaueraltminuten / $videodauerneuminuten" -ForegroundColor Red
         $errorduration++
+        Remove-Item -LiteralPath $newfile -Confirm:$false -Verbose
         Start-Sleep -Seconds 2
         continue
       }

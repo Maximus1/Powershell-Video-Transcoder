@@ -3,15 +3,17 @@ $existingVariables = Get-Variable
 try
 {
   ${encoder-preset} = 'medium'
-  ${audio-codec-bitrate-256} = '256k'
+  ${audio-codec-bitrate-256} = '192k'
   ${audio-codec-bitrate-128} = '128k'
   ${hb-audiocodec} = 'av_aac'
   ${video-codec-hevc} = 'HEVC'
   ${audio-codec-aac} = 'AAC'
+  $af = "acompressor=threshold=0.05:ratio=10:attack=200:release=1000"
+  $HBDRC = 1.5
   ${Languages-audio-video} = 'ger,deu,de,und,,'
   $extensions = @('*.mkv', '*.mp4', '*.avi')
   $zielextension = '.mkv'
-  $seriessessonfolder = '*Staffel*'# Your naming for Seasons comes here. !!don´t remove the stars!!
+  $seriessessonfolder = '*Staffel 0*'# Your naming for Seasons comes here. !!don´t remove the stars!!
   $series720p = 0
   $zahlffmpg = 0
   $videoquality = 22
@@ -21,7 +23,7 @@ try
   $zahlffmpgmax = 5
   $zahlhandb = 0
   $zahlhandbmax = 2
-  $ffmpgexe = "$env:USERPROFILE\Documents\FFmpeg Batch AV Converter\ffmpeg.exe" #<---- Your path to FFmpeg 
+  $ffmpgexe = "$env:ProgramFiles\EibolSoft\FFmpeg Batch AV Converter\ffmpeg.exe" #<---- Your path to FFmpeg 
   $handbrakeexe = "$env:ProgramW6432\HandBrake\HandBrakeCLI.exe" #<---- Your path to Handbrakecli
   $textoutput = "$env:USERPROFILE\Desktop\test.txt" #<---- Your path to Textfile
   $waitprocess = 10
@@ -30,6 +32,7 @@ try
   $newfile = ''
   $i = 0
   $filelist =''
+
 
   Add-Type -AssemblyName System.Windows.Forms
   #region begin functions
@@ -263,7 +266,7 @@ try
     $zahlffmpg = (Get-Process -Name 'FFmpeg*').count
     if ($zahlffmpg -lt $zahlffmpgmax )
     {
-      Start-Process  -FilePath $ffmpgexe -ArgumentList  "-i `"$oldfile`" -c:v copy -c:a aac -ab `"$aacbitrate`" -ar `"$aachz`" -filter:a loudnorm `"$newfile`""
+      Start-Process  -FilePath $ffmpgexe -ArgumentList  "-i `"$oldfile`" -c:v copy -c:a aac -ab `"$aacbitrate`" -ar `"$aachz`" -filter:a loudnorm -af `"$af`" `"$newfile`""
       Write-Oldfileitem
     }
     else
@@ -280,7 +283,7 @@ try
         Variable-Instanzen
       }
       $warteffmpeg = 0
-      Start-Process  -FilePath $ffmpgexe -ArgumentList  "-i `"$oldfile`" -c:v copy -c:a aac -ab `"$aacbitrate`" -ar `"$aachz`" -filter:a loudnorm `"$newfile`""
+      Start-Process  -FilePath $ffmpgexe -ArgumentList  "-i `"$oldfile`" -c:v copy -c:a aac -ab `"$aacbitrate`" -ar `"$aachz`" -filter:a loudnorm -af `"$af`" `"$newfile`""
       Write-Oldfileitem
     }
   }
@@ -294,12 +297,12 @@ try
       Write-Host -Object "$zahlhandb / $zahlhandbmax"
       if($series720p -eq [int]0)
       {
-        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" --normalize-mix `"$handbrakenormalize`" -i `"$oldfile`" -o `"$newfile`""
+        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" --vfr --enable-hw-decoding `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" -R `"$handbrakehz`" --normalize-mix `"$handbrakenormalize`" -D `"$HBDRC`" -i `"$oldfile`" -o `"$newfile`""
         Write-Oldfileitem
       }
       if($series720p -eq [int]1)
       {
-        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" -l 720 --loose-anamorphic --keep-display-aspect --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" --normalize-mix `"$handbrakenormalize`" -i `"$oldfile`" -o `"$newfile`""
+        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" -l 720 --loose-anamorphic --keep-display-aspect --vfr --enable-hw-decoding `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" -R `"$handbrakehz`" --normalize-mix `"$handbrakenormalize`" -D `"$HBDRC`" -i `"$oldfile`" -o `"$newfile`""
         Write-Oldfileitem
       }
     }
@@ -319,12 +322,12 @@ try
       $wartehb = 0
       if($series720p -eq 0)
       {
-        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" --normalize-mix `"$handbrakenormalize`" -i `"$oldfile`" -o `"$newfile`""
+        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" --vfr --enable-hw-decoding `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" -R `"$handbrakehz`" --normalize-mix `"$handbrakenormalize`" -D `"$HBDRC`" -i `"$oldfile`" -o `"$newfile`""
         Write-Oldfileitem
       }
       if($series720p -eq 1)
       {
-        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" -l 720 --loose-anamorphic --keep-display-aspect --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" --normalize-mix `"$handbrakenormalize`" -i `"$oldfile`" -o `"$newfile`""
+        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" -l 720 --loose-anamorphic --keep-display-aspect --vfr --enable-hw-decoding `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" -R `"$handbrakehz`" --normalize-mix `"$handbrakenormalize`" -D `"$HBDRC`" -i `"$oldfile`" -o `"$newfile`""
         Write-Oldfileitem
       }
     }
@@ -340,12 +343,12 @@ try
       Write-Host -Object "$zahlhandb / $zahlhandbmax"
       if($series720p -eq [int]0)
       {
-        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle  -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
+        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium --vfr --enable-hw-decoding `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle  -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
         Write-Oldfileitem
       }
       if($series720p -eq [int]1)
       {
-        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium -l 720 --loose-anamorphic --keep-display-aspect --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle  -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
+        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium -l 720 --loose-anamorphic --keep-display-aspect --vfr --enable-hw-decoding `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle  -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
         Write-Oldfileitem
       }
     }
@@ -365,12 +368,12 @@ try
       $wartehb = 0
       if($series720p -eq 0)
       {
-        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium --vfr -A `"$HBHWDec`" --quality 22 --subtitle-lang-list `"$subtitlelanglist`"  --audio-lang-list `"$audiotitlelanglist`" --first-subtitle -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
+        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium --vfr --enable-hw-decoding `"$HBHWDec`" --quality 22 --subtitle-lang-list `"$subtitlelanglist`"  --audio-lang-list `"$audiotitlelanglist`" --first-subtitle -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
         Write-Oldfileitem
       }
       if($series720p -eq 1)
       {
-        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium -l 720 --loose-anamorphic --keep-display-aspect --vfr -A `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle  -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
+        Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium -l 720 --loose-anamorphic --keep-display-aspect --vfr --enable-hw-decoding `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle  -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
         Write-Oldfileitem
       }
     }
@@ -388,7 +391,7 @@ try
   $PickFolder.ShowReadOnly = $false
   $PickFolder.ReadOnlyChecked = $true
   $PickFolder.ValidateNames = $false
-
+ 
   $result = $PickFolder.ShowDialog()
   if($result -eq [Windows.Forms.DialogResult]::OK)
   {
@@ -396,7 +399,8 @@ try
     Write-Host -Object "Selected Location: $destFolder" -ForegroundColor Green
     Write-Host -Object 'Please Wait. Generating Filelist.'
 
-    $filelist = Get-ChildItem -Path "$destFolder" -Include $extensions -Recurse
+$filelist = ls -Path "$destFolder" -Include $extensions -Recurse
+
     $num = $filelist | Measure-Object
     $filecount = $num.count
 
@@ -427,6 +431,7 @@ try
       $progress = [Math]::Round($progress,2)
       #endregion Files
       #region begin getting Mediainfo
+      #$Videofile = Get-MediaInfoSummary -Path $oldfile
       $audioformat = Get-MediaInfoValue -Path $oldfile -Kind Audio -Parameter 'Format'
       $videoformat = Get-MediaInfoValue -Path $oldfile -Kind Video -Parameter 'Format'
       [Int]$audiochanels = Get-MediaInfoValue -Path $oldfile -Kind Audio -Parameter 'Channel(s)'
@@ -507,6 +512,7 @@ try
           $handbrakeaudiocodec = ${hb-audiocodec}
           $handbrakeaudiobitrate = ${audio-codec-bitrate-256}
           $handbrakenormalize = '1'
+          $handbrakehz = '48'
           $hbmixdown = '5point1'
           Write-Host -Object 'Handbrake Surround full convert'
           check-ignore
@@ -518,6 +524,7 @@ try
         {
           $handbrakeaudiocodec = ${hb-audiocodec}
           $handbrakeaudiobitrate = ${audio-codec-bitrate-128}
+          $handbrakehz = '44.1'
           $handbrakenormalize = '1'
           $hbmixdown = 'stereo'
           Write-Host -Object 'Handbrake Stereo full convert'
