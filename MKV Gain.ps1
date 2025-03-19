@@ -1,11 +1,12 @@
 # PowerShell-Skript zur Lautstärkeanalyse und Anpassung der Lautstärke von MKV-Dateien mit FFmpeg
 # Setze das Verzeichnis, in dem nach MKV-Dateien gesucht werden soll
-#$directory = "X:\MythBusters"
+$directory = "X:\MythBusters"
 # Stelle sicher, dass ffmpeg im Systempfad verfügbar ist oder gebe den kompletten Pfad an
 $ffmpegPath = "C:\Program Files\EibolSoft\FFmpeg Batch AV Converter\ffmpeg.exe"
 # Ziel-Lautheit in LUFS (z. B. -14 LUFS für YouTube, -23 LUFS für Rundfunk)
 $targetLoudness = -18
 
+Add-Type -AssemblyName System.Windows.Forms
 # Funktion zum Extrahieren der Mediendaten mittels FFmpeg
 function Get-MediaInfo {
     param (
