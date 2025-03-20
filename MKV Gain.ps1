@@ -1,6 +1,6 @@
 # PowerShell-Skript zur Lautstärkeanalyse und Anpassung der Lautstärke von MKV-Dateien mit FFmpeg
 # Setze das Verzeichnis, in dem nach MKV-Dateien gesucht werden soll
-$directory = "X:\MythBusters"
+#$directory = "X:\MythBusters"
 # Stelle sicher, dass ffmpeg im Systempfad verfügbar ist oder gebe den kompletten Pfad an
 $ffmpegPath = "C:\Program Files\EibolSoft\FFmpeg Batch AV Converter\ffmpeg.exe"
 # Ziel-Lautheit in LUFS (z. B. -14 LUFS für YouTube, -23 LUFS für Rundfunk)
@@ -191,7 +191,9 @@ Clear-Host
     Write-Host -Object 'Please Wait. Generating Filelist.'
 
     $mkvFiles1 = Get-ChildItem -Path $destFolder -Filter "*.mkv" -Recurse
-
+    $mkvFileCount = ($mkvFiles1 | Measure-Object).Count
+    Write-Host "$mkvFileCount MKV-Dateien gefunden." -ForegroundColor Green
+  
 foreach ($file in $mkvFiles1) {
     Write-Host "Prüfe Datei: $($file)" -ForegroundColor DarkGray
 # Überspringe bereits normalisierte Dateien
@@ -230,7 +232,8 @@ foreach ($file in $mkvFiles1) {
         # Führe ffmpeg mit der Lautstärkeanalyse über ebur128 aus - Ausgabe in Variable erfassen
         $tempOutputFile = [System.IO.Path]::GetTempFileName()
         Write-Host "Analysiere $($file.Name)"
-        $ffmpegProcess = Start-Process -FilePath $ffmpegPath -ArgumentList "-i", "`"$($file.FullName)`"", "-filter_complex", "ebur128=metadata=1", "-f", "null", "NUL" -NoNewWindow -PassThru -RedirectStandardError $tempOutputFile
+        $tempOutputFile = [System.IO.Path]::GetTempFileName()
+        $ffmpegProcess = Start-Process -FilePath $ffmpegPath -ArgumentList "-i", "`"$($file.FullName)`"", "-hide_banner", "-filter_complex", "ebur128=metadata=1", "-f", "null", "NUL" -NoNewWindow -PassThru -RedirectStandardError $tempOutputFile
         $ffmpegProcess.WaitForExit()
         Write-Host "Analysiere fertig"
 
@@ -268,7 +271,7 @@ foreach ($file in $mkvFiles1) {
             
             Write-Host "Wende die Lautstärkeanpassung mit ffmpeg an"
             # Wende die Lautstärkeanpassung mit ffmpeg an und warte auf den Abschluss
-            $process = Start-Process -FilePath $ffmpegPath -ArgumentList "-i", "`"$($file.FullName)`"", "-af", "volume=${gain}dB", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-c:s", "copy", "-metadata", "LUFS=18", "-metadata", "gained=${gain}", "-metadata", "normalized=true", "`"$outputFile`"" -NoNewWindow -PassThru
+            $process = Start-Process -FilePath $ffmpegPath -ArgumentList "-i", "`"$($file.FullName)`"", "-hide_banner", "-af", "volume=${gain}dB", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-c:s", "copy", "-metadata", "LUFS=18", "-metadata", "gained=${gain}", "-metadata", "normalized=true", "`"$outputFile`"" -NoNewWindow -PassThru -Wait
             
             # Warte auf den Abschluss dieses Prozesses
             Write-Host "Verarbeite $($file.Name) - Bitte warten..." -ForegroundColor Yellow
