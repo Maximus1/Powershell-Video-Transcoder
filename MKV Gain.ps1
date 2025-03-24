@@ -7,6 +7,7 @@ $ffmpegPath = "C:\Program Files\EibolSoft\FFmpeg Batch AV Converter\ffmpeg.exe"
 $targetLoudness = -18
 
 Add-Type -AssemblyName System.Windows.Forms
+
 # Funktion zum Extrahieren der Mediendaten mittels FFmpeg
 function Get-MediaInfo {
     param (
@@ -60,7 +61,7 @@ function Get-MediaInfo {
             $mediaInfo.Duration = $totalSeconds
             $mediaInfo.DurationFormatted = "{0:D2}:{1:D2}:{2:D2}.{3:D2}" -f $hours, $minutes, $seconds, $milliseconds
             
-            Write-Host "Extrahierte Dauer: $($mediaInfo.DurationFormatted)" -ForegroundColor DarkCyan
+            #Write-Host "Extrahierte Dauer: $($mediaInfo.DurationFormatted)" -ForegroundColor DarkCyan
         }
         else {
             Write-Host "WARNUNG: Konnte Dauer nicht aus der FFmpeg-Ausgabe extrahieren" -ForegroundColor Yellow
@@ -71,15 +72,15 @@ function Get-MediaInfo {
         # Extrahiere die Anzahl der Audiokanäle mit verbessertem Regex
         if ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Audio:.*?,\s+\d+\s+Hz,\s+([\d.]+)") {
             $mediaInfo.AudioChannels = $matches[1]
-            Write-Host "Extrahierte Audiokanäle: $($mediaInfo.AudioChannels)" -ForegroundColor DarkCyan
+            #Write-Host "Extrahierte Audiokanäle: $($mediaInfo.AudioChannels)" -ForegroundColor DarkCyan
         }
         elseif ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Audio:.+?stereo") {
             $mediaInfo.AudioChannels = 2
-            Write-Host "Audioformat ist stereo (2 Kanäle)" -ForegroundColor DarkCyan
+            #Write-Host "Audioformat ist stereo (2 Kanäle)" -ForegroundColor DarkCyan
         }
         elseif ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Audio:.+?mono") {
             $mediaInfo.AudioChannels = 1
-            Write-Host "Audioformat ist mono (1 Kanal)" -ForegroundColor DarkCyan
+            #Write-Host "Audioformat ist mono (1 Kanal)" -ForegroundColor DarkCyan
         }
         else {
             Write-Host "WARNUNG: Konnte Audiokanäle nicht aus der FFmpeg-Ausgabe extrahieren" -ForegroundColor Yellow
@@ -95,7 +96,6 @@ function Get-MediaInfo {
     
     return $mediaInfo
 }
-
 function Get-MediaInfo2 { #keine file vorhanden prüfung
     param (
         [string]$filePath
@@ -121,7 +121,6 @@ function Get-MediaInfo2 { #keine file vorhanden prüfung
         
         $infoOutput = $process.StandardError.ReadToEnd()
         $process.WaitForExit()
-
   
         # Extrahiere die Dauer mit einem verbesserten Regex-Pattern
         if ($infoOutput -match "Duration:\s*(\d+):(\d+):(\d+)\.(\d+)") {
@@ -166,7 +165,6 @@ function Get-MediaInfo2 { #keine file vorhanden prüfung
         $mediaInfo.DurationFormatted = "00:00:00.00"
         $mediaInfo.AudioChannels = 0
     }
-    
     return $mediaInfo
 }
 
@@ -195,13 +193,14 @@ Clear-Host
     Write-Host "$mkvFileCount MKV-Dateien gefunden." -ForegroundColor Green
   
 foreach ($file in $mkvFiles1) {
-    Write-Host "Prüfe Datei: $($file)" -ForegroundColor DarkGray
+    $mkvFileCount = $mkvFileCount - 1
+    Write-Host "$mkvFileCount MKV-Dateien verbleibend." -ForegroundColor Green
+    #Write-Host "Prüfe Datei: $($file)" -ForegroundColor DarkGray
 # Überspringe bereits normalisierte Dateien
     if ($file.Name -match "_normalized") {
         Write-Host "Überspringe bereits normalisierte Datei: $($file.Name)" -ForegroundColor DarkGray
-        continue
     }
-    
+
     Write-Host "Analysiere: $($file.FullName)" -ForegroundColor Cyan
         
 # Hole Quelldatei-Informationen
@@ -231,11 +230,11 @@ foreach ($file in $mkvFiles1) {
     try {
         # Führe ffmpeg mit der Lautstärkeanalyse über ebur128 aus - Ausgabe in Variable erfassen
         $tempOutputFile = [System.IO.Path]::GetTempFileName()
-        Write-Host "Analysiere $($file.Name)"
+        Write-Host "Analysiere Lautstärkevon $($file.Name)" -ForegroundColor Magenta
         $tempOutputFile = [System.IO.Path]::GetTempFileName()
         $ffmpegProcess = Start-Process -FilePath $ffmpegPath -ArgumentList "-i", "`"$($file.FullName)`"", "-hide_banner", "-filter_complex", "ebur128=metadata=1", "-f", "null", "NUL" -NoNewWindow -PassThru -RedirectStandardError $tempOutputFile
         $ffmpegProcess.WaitForExit()
-        Write-Host "Analysiere fertig"
+        Write-Host "Analysiere fertig" -ForegroundColor Green
 
         # Lese die Ausgabe aus der temporären Datei
         $ffmpegOutput = Get-Content -Path $tempOutputFile -Raw
@@ -258,7 +257,7 @@ foreach ($file in $mkvFiles1) {
     # Extrahiere die integrierte Lautheit (LUFS) mit verbessertem Regex-Pattern
     if ($ffmpegOutput -match "I:\s*([-\d\.]+)\s*LUFS") {
         $integratedLoudness = [double]$matches[1]
-        Write-Host "Integrierte Lautheit für $($file.Name): $integratedLoudness LUFS" -ForegroundColor Green
+        Write-Host "Integrierte Lautheit für $($file.Name): $integratedLoudness LUFS" -ForegroundColor Magenta
         
         # Berechne den notwendigen Gain-Wert
         $gain = $targetLoudness - $integratedLoudness
@@ -271,12 +270,16 @@ foreach ($file in $mkvFiles1) {
             
             Write-Host "Wende die Lautstärkeanpassung mit ffmpeg an"
             # Wende die Lautstärkeanpassung mit ffmpeg an und warte auf den Abschluss
-            $process = Start-Process -FilePath $ffmpegPath -ArgumentList "-i", "`"$($file.FullName)`"", "-hide_banner", "-af", "volume=${gain}dB", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-c:s", "copy", "-metadata", "LUFS=18", "-metadata", "gained=${gain}", "-metadata", "normalized=true", "`"$outputFile`"" -NoNewWindow -PassThru -Wait
+            if ($sourceInfo.AudioChannels -igt 2) {
+                $process = Start-Process -FilePath $ffmpegPath -ArgumentList "-y", "-i", "`"$($file.FullName)`"", "-hide_banner", "-af", "volume=${gain}dB", "-c:v", "copy", "-c:a", "aac", "-ac", "6", "-channel_layout", "5.1", "-c:s", "copy", "-metadata", "LUFS=18", "-metadata", "gained=${gain}", "-metadata", "normalized=true", "`"$outputFile`"" -NoNewWindow -PassThru -Wait
+            } else {
+                $process = Start-Process -FilePath $ffmpegPath -ArgumentList "-y", "-i", "`"$($file.FullName)`"", "-hide_banner", "-af", "volume=${gain}dB", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-c:s", "copy", "-metadata", "LUFS=18", "-metadata", "gained=${gain}", "-metadata", "normalized=true", "`"$outputFile`"" -NoNewWindow -PassThru -Wait
+            }
             
             # Warte auf den Abschluss dieses Prozesses
             Write-Host "Verarbeite $($file.Name) - Bitte warten..." -ForegroundColor Yellow
             $process.WaitForExit()
-            Write-Host "Lautstärkeanpassung fertig"
+            Write-Host "Lautstärkeanpassung fertig" -ForegroundColor Green
 
             # Variable für das Protokoll
             $logContent = @()
