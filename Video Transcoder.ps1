@@ -37,7 +37,7 @@ try
   Add-Type -AssemblyName System.Windows.Forms
   #region begin functions
   #If Season in Path set encoded video to 720p else use movie Settings
-  function Check-Series
+  function Test-Series
   {
     if ($file.DirectoryName -like $seriessessonfolder)
     {
@@ -60,7 +60,7 @@ try
     }
   }
   #Set maximum Procecces
-  Function Variable-Instanzen
+  Function Get-VariableInstanzen
   {
     $script:zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
     $script:zahlffmpg = (Get-Process -Name 'FFmpeg*').count
@@ -80,7 +80,7 @@ try
   }
 
   #Check if allready converted (...neu.EXT)
-  function Newfile-Vorhanden
+  function Test-NewFileExists
   {
     if([IO.File]::Exists($newfile))
     {
@@ -102,7 +102,7 @@ try
   }
 
   #Check for existing .ignore file
-  function check-ignore
+  function Test-IgnoreFile
   {
     if([IO.File]::Exists($ignorefile))
     {
@@ -152,7 +152,7 @@ try
   }
 
   #Suche nach MKV Dateien
-  Function Newfile-check
+  Function Test-Newfile
   {
     Try
     {
@@ -261,7 +261,7 @@ try
   }
 
   #Encode Audio only with FFmpg
-  function FFmpeg-Encode
+  function Invoke-FFmpegEncode
   {
     $zahlffmpg = (Get-Process -Name 'FFmpeg*').count
     if ($zahlffmpg -lt $zahlffmpgmax )
@@ -280,7 +280,7 @@ try
         }
         Start-Sleep -Seconds $waitprocess
         $zahlffmpg = (Get-Process -Name 'FFmpeg*').count
-        Variable-Instanzen
+        Get-VariableInstanzen
       }
       $warteffmpeg = 0
       Start-Process  -FilePath $ffmpgexe -ArgumentList  "-i `"$oldfile`" -c:v copy -c:a aac -ab `"$aacbitrate`" -ar `"$aachz`" -filter:a loudnorm -af `"$af`" `"$newfile`""
@@ -289,7 +289,7 @@ try
   }
 
   #Encode Audio and Video wit HandbrakeCli
-  function Handbrake-Encoderfull
+  function Invoke-HandbrakeEncoderFull
   {
     $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
     if ($zahlhandb -lt $zahlhandbmax -and $Auslastung -lt 75)
@@ -317,7 +317,7 @@ try
         }
         Start-Sleep -Seconds $waitprocess
         $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
-        Variable-Instanzen
+        Get-VariableInstanzen
       }
       $wartehb = 0
       if($series720p -eq 0)
@@ -334,7 +334,7 @@ try
   }
 
   #Encode Video only with HandbrtakeCli
-  function Handbrake-Encoderaudiocopy
+  function Invoke-HandbrakeEncoderaudiocopy
   {
     $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
     Variable-Instanzen
@@ -399,7 +399,7 @@ try
     Write-Host -Object "Selected Location: $destFolder" -ForegroundColor Green
     Write-Host -Object 'Please Wait. Generating Filelist.'
 
-$filelist = ls -Path "$destFolder" -Include $extensions -Recurse
+$filelist = Get-ChildItem -Path "$destFolder" -Include $extensions -Recurse
 
     $num = $filelist | Measure-Object
     $filecount = $num.count
@@ -457,8 +457,8 @@ $filelist = ls -Path "$destFolder" -Include $extensions -Recurse
       Write-Host -Object "Handbrake Instanzen : $zahlhandb / $zahlhandbmax"
       Write-Host -Object -Step--------------------------------------------------------------------------
       #endregion Write host
-      Newfile-Vorhanden
-      Check-Series
+      Test-NewFileExists
+      Test-Series
 
       #ist AAC und ist HEVC
       if ($audioformat -eq ${audio-codec-aac} -AND $videoformat -eq ${video-codec-hevc})
@@ -487,7 +487,7 @@ $filelist = ls -Path "$destFolder" -Include $extensions -Recurse
           $aachz = '48000'
           Write-Host -Object 'FFMPEG Surround copy Video'
           check-ignore
-          FFmpeg-Encode
+          Invoke-FFmpegEncode
 
           continue
         }
@@ -497,8 +497,8 @@ $filelist = ls -Path "$destFolder" -Include $extensions -Recurse
           $aacbitrate = ${audio-codec-bitrate-128}
           $aachz = '44100'
           Write-Host -Object 'FFMPEG Stereo copy Video'
-          check-ignore
-          FFmpeg-Encode
+          Test-IgnoreFile
+          Invoke-FFmpegEncode
           continue
         }
       }
@@ -515,8 +515,8 @@ $filelist = ls -Path "$destFolder" -Include $extensions -Recurse
           $handbrakehz = '48'
           $hbmixdown = '5point1'
           Write-Host -Object 'Handbrake Surround full convert'
-          check-ignore
-          Handbrake-Encoderfull
+          Test-IgnoreFile
+          Invoke-HandbrakeEncoderFull
           continue
         }
         #stereo oder mono
@@ -528,8 +528,8 @@ $filelist = ls -Path "$destFolder" -Include $extensions -Recurse
           $handbrakenormalize = '1'
           $hbmixdown = 'stereo'
           Write-Host -Object 'Handbrake Stereo full convert'
-          check-ignore
-          Handbrake-Encoderfull
+          Test-IgnoreFile
+          Invoke-HandbrakeEncoderFull
           continue
         }
       }
@@ -539,12 +539,12 @@ $filelist = ls -Path "$destFolder" -Include $extensions -Recurse
       {
         Write-Host -Object 'Handbrake copy audio'
         $handbrakeaudiocodec = 'copy'
-        check-ignore
-        Handbrake-Encoderaudiocopy
+        Test-IgnoreFile
+        Invoke-HandbrakeEncoderaudiocopy
         continue
       }
     }
-    Newfile-check
+    Test-Newfile
   }
   else
   {

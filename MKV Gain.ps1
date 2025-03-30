@@ -2,11 +2,85 @@
 # Setze das Verzeichnis, in dem nach MKV-Dateien gesucht werden soll
 #$directory = "X:\MythBusters"
 # Stelle sicher, dass ffmpeg im Systempfad verfügbar ist oder gebe den kompletten Pfad an
-$ffmpegPath = "C:\Program Files\EibolSoft\FFmpeg Batch AV Converter\ffmpeg.exe"
+$ffmpegPath = "F:\media-autobuild_suite-master\local64\bin-video\ffmpeg.exe"
 # Ziel-Lautheit in LUFS (z. B. -14 LUFS für YouTube, -23 LUFS für Rundfunk)
 $targetLoudness = -18
 
 Add-Type -AssemblyName System.Windows.Forms
+
+
+# Funktion zur Lautstärkeanalyse mit FFmpeg
+function Get-LoudnessInfo {
+    param (
+        [string]$filePath
+    )
+        
+    try {
+        # Für Windows: Nutze NUL statt /dev/null
+        # Führe ffmpeg mit der Lautstärkeanalyse über ebur128 aus - Ausgabe in Variable erfassen
+        $tempOutputFile = [System.IO.Path]::GetTempFileName()
+        $ffmpegProcess = Start-Process -FilePath $ffmpegPath -ArgumentList "-i", "`"$($filePath)`"", "-hide_banner", "-filter_complex", "ebur128=metadata=1", "-f", "null", "NUL" -NoNewWindow -PassThru -RedirectStandardError $tempOutputFile
+        $ffmpegProcess.WaitForExit()
+         Write-Host "Analysieren fertig" -ForegroundColor Green
+
+        # Lese die Ausgabe aus der temporären Datei
+        $ffmpegOutput = Get-Content -Path $tempOutputFile -Raw
+           
+        # Lösche die temporäre Datei
+        Remove-Item -Path $tempOutputFile -Force -ErrorAction SilentlyContinue
+        if ($ffmpegOutput -match "I:\s*([-\d\.]+)\s*LUFS") {
+            Write-Host "Integrierte Lautheit für $($file.Name): $integratedLoudness LUFS" -ForegroundColor yellow
+        } else {
+            if ($ffmpegOutput -match "Error|Invalid") {
+                Write-Host "Fehler beim Verarbeiten von $($file.Name):" -ForegroundColor Red
+                Write-Host $ffmpegOutput -ForegroundColor Red #Ausgabe der Fehlermeldung
+            }
+        }
+        return $ffmpegOutput
+    }
+    catch {
+        Write-Host "Fehler beim Ausführen von FFmpeg: $_" -ForegroundColor Red
+        # Überprüfe, ob FFmpeg Fehler ausgibt
+    
+        return $null
+    }
+}
+
+# Funktion zur Anpassung der Lautstärke mit FFmpeg
+function Set-VolumeGain {
+    param (
+        [string]$filePath, # Pfad zur Eingabedatei
+        [double]$gain, # Der anzuwendende Gain-Wert in dB
+        [string]$outputFile, # Pfad für die Ausgabedatei
+        [int]$audioChannels # Anzahl der Audiokanäle in der Eingabedatei
+    )
+
+    Write-Host "Wende die Lautstärkeanpassung mit ffmpeg an"
+    # Wende die Lautstärkeanpassung mit ffmpeg an und warte auf den Abschluss
+    try {
+        # Überprüfe die Anzahl der Audiokanäle, um den richtigen FFmpeg-Befehl auszuwählen
+        if ($audioChannels -igt 2) {
+            # Für Dateien mit mehr als 2 Audiokanälen (z.B. 5.1)
+            $process = Start-Process -FilePath $ffmpegPath -ArgumentList "-y", "-i", "`"$($filePath)`"", "-hide_banner", "-af", "volume=${gain}dB", "-c:v", "copy", "-c:a", "libfdk_aac", "-profile:a", "aac_he", "-ac", "6", "-channel_layout", "5.1", "-c:s", "copy", "-metadata", "LUFS=18", "-metadata", "gained=${gain}", "-metadata", "normalized=true", "`"$($outputFile)`"" -NoNewWindow -PassThru -Wait -ErrorAction Stop
+        } else {
+            # Für Dateien mit 2 oder weniger Audiokanälen (z.B. Stereo oder Mono)
+            $process = Start-Process -FilePath $ffmpegPath -ArgumentList "-y", "-i", "`"$($filePath)`"", "-hide_banner", "-af", "volume=${gain}dB", "-c:v", "copy", "-c:a", "libfdk_aac",  "-profile:a", "aac_he", "-b:a", "192k", "-c:s", "copy", "-metadata", "LUFS=18", "-metadata", "gained=${gain}", "-metadata", "normalized=true", "`"$($outputFile)`"" -NoNewWindow -PassThru -Wait -ErrorAction Stop
+        }
+        # Warte auf den Abschluss dieses Prozesses
+
+        $process.WaitForExit()
+        Write-Host "Lautstärkeanpassung fertig" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "Fehler bei der Lautstärkeanpassung: $_" -ForegroundColor Red
+        # Alternativer Befehl, falls die Standardanpassung fehlschlägt
+        Write-Host "Alternativer Befehl wird ausgeführt..." -ForegroundColor Yellow
+        $process = Start-Process -FilePath $ffmpegPath -ArgumentList "-fflags", "+genpts", "-i", "`"$($filePath)`"", "-c:v", "copy", "-c:a", "copy", "-avoid_negative_ts", "make_zero", "`"$($outputFile)`"" -NoNewWindow -PassThru -Wait -ErrorAction Stop
+        Write-Host "Repariere $($filePath) - Bitte warten..." -ForegroundColor Yellow
+        $process.WaitForExit()
+        Write-Host "Reparatur abgeschlossen" -ForegroundColor Green
+    }
+}
 
 # Funktion zum Extrahieren der Mediendaten mittels FFmpeg
 function Get-MediaInfo {
@@ -49,6 +123,10 @@ function Get-MediaInfo {
         Write-Host "Überspringe bereits normalisierte Datei: $($file.Name) (Tag)" -ForegroundColor green
         continue
     }
+<#     if ($infoOutput -match "REPAIR" ) {
+        Write-Host "Überspringe defekte Datei: $($file.Name) (Tag)" -ForegroundColor green
+        continue
+    } #>
         
         # Extrahiere die Dauer mit einem verbesserten Regex-Pattern
         if ($infoOutput -match "Duration:\s*(\d+):(\d+):(\d+)\.(\d+)") {
@@ -182,29 +260,23 @@ Clear-Host
   $PickFolder.ValidateNames = $false
  
   $result = $PickFolder.ShowDialog()
-  if($result -eq [Windows.Forms.DialogResult]::OK)
-  {
+  if($result -eq [Windows.Forms.DialogResult]::OK)  {
     $destFolder = Split-Path -Path $PickFolder.FileName
     Write-Host -Object "Selected Location: $destFolder" -ForegroundColor Green
-    Write-Host -Object 'Please Wait. Generating Filelist.'
+    Write-Host -Object 'Please Wait. Generating Filelist.' -ForegroundColor Green
 
     $mkvFiles1 = Get-ChildItem -Path $destFolder -Filter "*.mkv" -Recurse
     $mkvFileCount = ($mkvFiles1 | Measure-Object).Count
     Write-Host "$mkvFileCount MKV-Dateien gefunden." -ForegroundColor Green
   
-foreach ($file in $mkvFiles1) {
-    $mkvFileCount = $mkvFileCount - 1
+foreach ($file in $mkvFiles1) {    
     Write-Host "$mkvFileCount MKV-Dateien verbleibend." -ForegroundColor Green
-    #Write-Host "Prüfe Datei: $($file)" -ForegroundColor DarkGray
+    $mkvFileCount --
 # Überspringe bereits normalisierte Dateien
-    if ($file.Name -match "_normalized") {
-        Write-Host "Überspringe bereits normalisierte Datei: $($file.Name)" -ForegroundColor DarkGray
-    }
-
     Write-Host "Analysiere: $($file.FullName)" -ForegroundColor Cyan
         
 # Hole Quelldatei-Informationen
-    $sourceInfo = Get-MediaInfo -filePath $file.FullName
+    $sourceInfo = Get-MediaInfo -filePath $file.FullName # Ruft die Funktion Get-MediaInfo auf, um die Mediendaten der Datei zu extrahieren.
 
 # Überprüfe, ob die Mediendaten korrekt extrahiert wurden
     if ($sourceInfo.Duration -eq 0 -or $sourceInfo.AudioChannels -eq 0) {
@@ -218,7 +290,9 @@ foreach ($file in $mkvFiles1) {
             "Dauer: $($sourceInfo.DurationFormatted)",
             "Audiokanäle: $($sourceInfo.AudioChannels)"
         ) | Out-File -FilePath $logFile -Encoding UTF8
-        
+        Write-Host "Konnte Dauer oder Audiokanäle nicht ermitteln." -ForegroundColor Red
+        Write-Host "Fehlerprotokoll erstellt: $logFile" -ForegroundColor Red
+        Write-Host "Überspringe Datei." -ForegroundColor Red
         continue
     }
     
@@ -226,60 +300,21 @@ foreach ($file in $mkvFiles1) {
     Write-Host "  Dauer: $($sourceInfo.DurationFormatted)" -ForegroundColor Blue
     Write-Host "  Audiokanäle: $($sourceInfo.AudioChannels)" -ForegroundColor Blue
     
-    # Für Windows: Nutze NUL statt /dev/null
-    try {
-        # Führe ffmpeg mit der Lautstärkeanalyse über ebur128 aus - Ausgabe in Variable erfassen
-        $tempOutputFile = [System.IO.Path]::GetTempFileName()
-        Write-Host "Analysiere Lautstärkevon $($file.Name)" -ForegroundColor Magenta
-        $tempOutputFile = [System.IO.Path]::GetTempFileName()
-        $ffmpegProcess = Start-Process -FilePath $ffmpegPath -ArgumentList "-i", "`"$($file.FullName)`"", "-hide_banner", "-filter_complex", "ebur128=metadata=1", "-f", "null", "NUL" -NoNewWindow -PassThru -RedirectStandardError $tempOutputFile
-        $ffmpegProcess.WaitForExit()
-        Write-Host "Analysiere fertig" -ForegroundColor Green
-
-        # Lese die Ausgabe aus der temporären Datei
-        $ffmpegOutput = Get-Content -Path $tempOutputFile -Raw
+    # Führe ffmpeg mit der Lautstärkeanalyse über ebur128 aus - Ausgabe in Variable erfassen
+    Write-Host "Analysiere Lautstärke von $($file.Name)" -ForegroundColor cyan
+    $ffmpegOutput = Get-LoudnessInfo -filePath $file.FullName # Ruft die Funktion Get-LoudnessInfo auf, um die Lautstärkeinformationen der Datei zu analysieren.
+    
         
-        # Lösche die temporäre Datei
-        Remove-Item -Path $tempOutputFile -Force -ErrorAction SilentlyContinue
-    }
-    catch {
-        Write-Host "Fehler beim Ausführen von FFmpeg: $_" -ForegroundColor Red
-        continue
-    }
-    
-    # Überprüfe, ob FFmpeg Fehler ausgibt
-    if ($ffmpegOutput -match "Error|Invalid") {
-        Write-Host "Fehler beim Verarbeiten von $($file.Name):" -ForegroundColor Red
-        Write-Host $ffmpegOutput -ForegroundColor Red
-        continue
-    }
-    
     # Extrahiere die integrierte Lautheit (LUFS) mit verbessertem Regex-Pattern
     if ($ffmpegOutput -match "I:\s*([-\d\.]+)\s*LUFS") {
-        $integratedLoudness = [double]$matches[1]
-        Write-Host "Integrierte Lautheit für $($file.Name): $integratedLoudness LUFS" -ForegroundColor Magenta
-        
-        # Berechne den notwendigen Gain-Wert
-        $gain = $targetLoudness - $integratedLoudness
+        $gain = $targetLoudness - $integratedLoudness # Berechne den notwendigen Gain-Wert
         
         if ([math]::Abs($gain) -gt 0.1) {
             Write-Host "Passe Lautstärke um $gain dB an für: $($file.Name)" -ForegroundColor Yellow
             
 # Erstelle den Namen für die angepasste Datei
             $outputFile = [System.IO.Path]::Combine($file.DirectoryName, "$($file.BaseName)_normalized.mkv")
-            
-            Write-Host "Wende die Lautstärkeanpassung mit ffmpeg an"
-            # Wende die Lautstärkeanpassung mit ffmpeg an und warte auf den Abschluss
-            if ($sourceInfo.AudioChannels -igt 2) {
-                $process = Start-Process -FilePath $ffmpegPath -ArgumentList "-y", "-i", "`"$($file.FullName)`"", "-hide_banner", "-af", "volume=${gain}dB", "-c:v", "copy", "-c:a", "aac", "-ac", "6", "-channel_layout", "5.1", "-c:s", "copy", "-metadata", "LUFS=18", "-metadata", "gained=${gain}", "-metadata", "normalized=true", "`"$outputFile`"" -NoNewWindow -PassThru -Wait
-            } else {
-                $process = Start-Process -FilePath $ffmpegPath -ArgumentList "-y", "-i", "`"$($file.FullName)`"", "-hide_banner", "-af", "volume=${gain}dB", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-c:s", "copy", "-metadata", "LUFS=18", "-metadata", "gained=${gain}", "-metadata", "normalized=true", "`"$outputFile`"" -NoNewWindow -PassThru -Wait
-            }
-            
-            # Warte auf den Abschluss dieses Prozesses
-            Write-Host "Verarbeite $($file.Name) - Bitte warten..." -ForegroundColor Yellow
-            $process.WaitForExit()
-            Write-Host "Lautstärkeanpassung fertig" -ForegroundColor Green
+            Set-VolumeGain -filePath $file.FullName -gain $gain -outputFile $outputFile -audioChannels $sourceInfo.AudioChannels
 
             # Variable für das Protokoll
             $logContent = @()
@@ -306,8 +341,7 @@ foreach ($file in $mkvFiles1) {
                     $verificationsOk = $false
                     $logContent += "FEHLER: Konnte Mediendaten für die Ausgabedatei nicht korrekt extrahieren."
                     Write-Host "  FEHLER: Konnte Mediendaten für die Ausgabedatei nicht korrekt extrahieren." -ForegroundColor Red
-                }
-                else {
+                } else {
                     $logContent += "Quelldatei-Dauer: $($sourceInfo.DurationFormatted) | Audiokanäle: $($sourceInfo.AudioChannels)"
                     $logContent += "Ausgabedatei-Dauer: $($outputInfo.DurationFormatted) | Audiokanäle: $($outputInfo.AudioChannels)"
                     
@@ -382,7 +416,6 @@ foreach ($file in $mkvFiles1) {
         } else {
             Write-Host "Lautstärke für $($file.Name) ist bereits nahe am Zielwert, keine Anpassung notwendig." -ForegroundColor Blue
             $process = Start-Process -FilePath $ffmpegPath -ArgumentList "-i", "`"$($file.FullName)`"", "-c:v", "copy", "-c:a", "copy", "-c:s", "copy", "-metadata", "normalized=true", "`"$outputFile`"" -NoNewWindow -PassThru
-
         }
     } else {
         Write-Host "Warnung: Keine Lautstärkeinformationen für $($file.Name) gefunden." -ForegroundColor Yellow
