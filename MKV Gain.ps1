@@ -8,7 +8,6 @@ $targetLoudness = -18
 
 Add-Type -AssemblyName System.Windows.Forms
 
-
 # Funktion zur Lautstärkeanalyse mit FFmpeg
 function Get-LoudnessInfo {
     param (

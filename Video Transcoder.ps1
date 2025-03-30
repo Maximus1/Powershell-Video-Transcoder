@@ -37,8 +37,7 @@ try
   Add-Type -AssemblyName System.Windows.Forms
   #region begin functions
   #If Season in Path set encoded video to 720p else use movie Settings
-  function Test-Series
-  {
+  function Test-Series  {
     if ($file.DirectoryName -like $seriessessonfolder)
     {
       Write-Host -Object 'Ist Serie'
@@ -60,8 +59,7 @@ try
     }
   }
   #Set maximum Procecces
-  Function Get-VariableInstanzen
-  {
+  Function Get-VariableInstanzen  {
     $script:zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
     $script:zahlffmpg = (Get-Process -Name 'FFmpeg*').count
     $script:Auslastung = (Get-WmiObject -Class win32_processor | Measure-Object -Property LoadPercentage -Average).Average
@@ -80,8 +78,7 @@ try
   }
 
   #Check if allready converted (...neu.EXT)
-  function Test-NewFileExists
-  {
+  function Test-NewFileExists  {
     if([IO.File]::Exists($newfile))
     {
       Write-Host -Object 'File already converted' -ForegroundColor Green
@@ -102,8 +99,7 @@ try
   }
 
   #Check for existing .ignore file
-  function Test-IgnoreFile
-  {
+  function Test-IgnoreFile  {
     if([IO.File]::Exists($ignorefile))
     {
       Write-Host -Object '.ignore file exists.'
@@ -116,14 +112,12 @@ try
   }
 
   #Write actual $oldfile into a TXT file !!Just for your control!!
-  function Write-Oldfileitem 
-  {
+  function Write-Oldfileitem   {
     "$oldfile" | Out-File -FilePath $textoutput -Append -Confirm:$false
   }
 
   #Filesize conversion
-  Function Format-FileSize()
-  {
+  Function Format-FileSize()  {
     Param ([Parameter(Mandatory)][long]$size)
     If ($size -gt 1TB)
     {
@@ -152,8 +146,7 @@ try
   }
 
   #Suche nach MKV Dateien
-  Function Test-Newfile
-  {
+  Function Test-Newfile  {
     Try
     {
       if([IO.File]::Exists($oldfile) -AND [IO.File]::Exists($newfile))
@@ -169,8 +162,7 @@ try
     }
   }
 
-  function Get-Audiocount
-  {
+  function Get-Audiocount  {
     $audiocountnew = (Get-MediaInfoValue -Path $newfile -Kind General -Parameter 'AudioCount')
     if ($audiocountnew -lt '1')
     {
@@ -180,8 +172,7 @@ try
     }
   }
        
-  function Compare-videolength
-  {
+  function Compare-videolength  {
     $videodaueralt = (Get-MediaInfoValue -Path $oldfile -Kind General -Parameter 'Duration')
     $videodaueraltminuten = [math]::Floor($videodaueralt/60000)
     Write-Host -Object "Dauer Alt : $videodaueralt / $videodaueraltminuten"
@@ -202,8 +193,7 @@ try
     }
   }
 
-  function Get-newnfofile
-  {
+  function Get-newnfofile  {
     if([IO.File]::Exists($oldfilenfo) -AND [IO.File]::Exists($newfilenfo))
     {
       Write-Host -Object 'beide da'
@@ -220,8 +210,7 @@ try
     }
   }
 
-  function Remove-newmedia
-  {
+  function Remove-newmedia  {
     if([IO.File]::Exists($newfilebildneuclearlogopng))
     {
       Remove-Item -LiteralPath $newfilebildneuclearlogopng -Confirm:$false -Verbose
@@ -261,8 +250,7 @@ try
   }
 
   #Encode Audio only with FFmpg
-  function Invoke-FFmpegEncode
-  {
+  function Invoke-FFmpegEncode  {
     $zahlffmpg = (Get-Process -Name 'FFmpeg*').count
     if ($zahlffmpg -lt $zahlffmpgmax )
     {
@@ -289,8 +277,7 @@ try
   }
 
   #Encode Audio and Video wit HandbrakeCli
-  function Invoke-HandbrakeEncoderFull
-  {
+  function Invoke-HandbrakeEncoderFull  {
     $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
     if ($zahlhandb -lt $zahlhandbmax -and $Auslastung -lt 75)
     {
@@ -334,8 +321,7 @@ try
   }
 
   #Encode Video only with HandbrtakeCli
-  function Invoke-HandbrakeEncoderaudiocopy
-  {
+  function Invoke-HandbrakeEncoderaudiocopy  {
     $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
     Variable-Instanzen
     if ($zahlhandb -lt $zahlhandbmax -and $Auslastung -lt 75)
