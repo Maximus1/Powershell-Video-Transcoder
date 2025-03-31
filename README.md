@@ -1,4 +1,6 @@
-# Powershell-Video-Transcoder
+~~# Powershell-Video-Transcoder~~
+Auto Video Transcode
+
 Transcode your Videos (Movies and Episodes) from AVI, MP4, MKV to MKV with AAC and HEVC
 
 This Script lets you choose a Folder and scanns recursive for AVI MP4 and MKV files.
@@ -12,10 +14,11 @@ This Script lets you choose a Folder and scanns recursive for AVI MP4 and MKV fi
   2. no AAC but HEVC - FFMPEG
     #Surround
     #stereo or mono
-  3. no AAC and no HEVC - handbrake
+    handbrake
+  3. no AAC and no HEVC - ~~handbrake~~ FFMPEG
     #Surround
     #stereo or mono
-  4. With ACC but no HEVC - handbrake
+  4. With ACC but no HEVC - ~~handbrake~~ FFMPEG
 - A path filter is used to check whether it is a series and then scaled down to 720p if necessary.
 - Films remain at their original resolution
 

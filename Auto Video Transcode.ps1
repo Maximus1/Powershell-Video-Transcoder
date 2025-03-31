@@ -405,9 +405,12 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
 
     # Alle MKV-Dateien im ausgewählten Ordner rekursiv suchen
     $mkvFiles = Get-ChildItem -Path $destFolder -Filter "*.mkv" -Recurse
+    $mkvFileCount = ($mkvFiles | Measure-Object).Count
 
     # Jede MKV-Datei verarbeiten
     foreach ($file in $mkvFiles) {
+        Write-Host "$mkvFileCount MKV-Dateien verbleibend." -ForegroundColor Green
+        $mkvFileCount --
         Write-Host "Verarbeite Datei: $($file.FullName)" -ForegroundColor Cyan
 
         # Mediendaten extrahieren
