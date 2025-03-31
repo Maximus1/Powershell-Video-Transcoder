@@ -52,7 +52,7 @@ function Get-LoudnessInfo {
     }
 }
 
-function Extract-MediaInfo { #keine file vorhanden prüfung
+function Get-MediaInfo { #keine file vorhanden prüfung
     param (
         [string]$filePath
     )

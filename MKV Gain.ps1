@@ -28,6 +28,7 @@ function Get-LoudnessInfo {
         # Lösche die temporäre Datei
         Remove-Item -Path $tempOutputFile -Force -ErrorAction SilentlyContinue
         if ($ffmpegOutput -match "I:\s*([-\d\.]+)\s*LUFS") {
+            $integratedLoudness = [double]$matches[1]
             Write-Host "Integrierte Lautheit für $($file.Name): $integratedLoudness LUFS" -ForegroundColor yellow
         } else {
             if ($ffmpegOutput -match "Error|Invalid") {
@@ -60,14 +61,18 @@ function Set-VolumeGain {
         # Überprüfe die Anzahl der Audiokanäle, um den richtigen FFmpeg-Befehl auszuwählen
         if ($audioChannels -igt 2) {
             # Für Dateien mit mehr als 2 Audiokanälen (z.B. 5.1)
-            $process = Start-Process -FilePath $ffmpegPath -ArgumentList "-y", "-i", "`"$($filePath)`"", "-hide_banner", "-af", "volume=${gain}dB", "-c:v", "copy", "-c:a", "libfdk_aac", "-profile:a", "aac_he", "-ac", "6", "-channel_layout", "5.1", "-c:s", "copy", "-metadata", "LUFS=18", "-metadata", "gained=${gain}", "-metadata", "normalized=true", "`"$($outputFile)`"" -NoNewWindow -PassThru -Wait -ErrorAction Stop
-        } else {
-            # Für Dateien mit 2 oder weniger Audiokanälen (z.B. Stereo oder Mono)
-            $process = Start-Process -FilePath $ffmpegPath -ArgumentList "-y", "-i", "`"$($filePath)`"", "-hide_banner", "-af", "volume=${gain}dB", "-c:v", "copy", "-c:a", "libfdk_aac",  "-profile:a", "aac_he", "-b:a", "192k", "-c:s", "copy", "-metadata", "LUFS=18", "-metadata", "gained=${gain}", "-metadata", "normalized=true", "`"$($outputFile)`"" -NoNewWindow -PassThru -Wait -ErrorAction Stop
+            $process = Start-Process -FilePath $ffmpegPath -ArgumentList "-y", "-i", "`"$($filePath)`"", "-hide_banner", "-af", "volume=${gain}dB", "-c:v", "copy", "-c:a", "libfdk_aac", "-profile:a", "aac_he", "-ac", "6", "-channel_layout", "5.1", "-c:s", "copy", "-metadata", "LUFS=18", "-metadata", "gained=${gain}", "-metadata", "normalized=true", "`"$($outputFile)`"" -NoNewWindow -PassThru -ErrorAction Stop
+        } 
+        if ($audioChannels -eq 2) {
+            # Für Dateien mit 2 Audiokanälen (z.B. Stereo)
+            $process = Start-Process -FilePath $ffmpegPath -ArgumentList "-y", "-i", "`"$($filePath)`"", "-hide_banner", "-af", "volume=${gain}dB", "-c:v", "copy", "-c:a", "libfdk_aac",  "-profile:a", "aac_he", "-b:a", "192k", "-c:s", "copy", "-metadata", "LUFS=18", "-metadata", "gained=${gain}", "-metadata", "normalized=true", "`"$($outputFile)`"" -NoNewWindow -PassThru -ErrorAction Stop
+        }
+        if ($audioChannels -eq 1) {
+            # Für Dateien mit 1 Audiokanal (z.B. Mono)
+            $process = Start-Process -FilePath $ffmpegPath -ArgumentList "-y", "-i", "`"$($filePath)`"", "-hide_banner", "-af", "volume=${gain}dB", "-c:v", "copy", "-c:a", "libfdk_aac", "ac", "1" "-profile:a", "aac_he", "-b:a", "192k", "-c:s", "copy", "-metadata", "LUFS=18", "-metadata", "gained=${gain}", "-metadata", "normalized=true", "`"$($outputFile)`"" -NoNewWindow -PassThru -ErrorAction Stop
         }
         # Warte auf den Abschluss dieses Prozesses
 
-        $process.WaitForExit()
         Write-Host "Lautstärkeanpassung fertig" -ForegroundColor Green
     }
     catch {
