@@ -2,6 +2,7 @@
 $existingVariables = Get-Variable
 try
 {
+  #region Variablen initialisieren
   ${encoder-preset} = 'medium'
   ${audio-codec-bitrate-256} = '192k'
   ${audio-codec-bitrate-128} = '128k'
@@ -23,7 +24,7 @@ try
   $zahlffmpgmax = 5
   $zahlhandb = 0
   $zahlhandbmax = 2
-  $ffmpgexe = "$env:ProgramFiles\EibolSoft\FFmpeg Batch AV Converter\ffmpeg.exe" #<---- Your path to FFmpeg 
+  $ffmpgexe = "F:\media-autobuild_suite-master\local64\bin-video\ffmpeg.exe" #<---- Your path to FFmpeg 
   $handbrakeexe = "$env:ProgramW6432\HandBrake\HandBrakeCLI.exe" #<---- Your path to Handbrakecli
   $textoutput = "$env:USERPROFILE\Desktop\test.txt" #<---- Your path to Textfile
   $waitprocess = 10
@@ -32,10 +33,50 @@ try
   $newfile = ''
   $i = 0
   $filelist =''
+  $integratedLoudness = ''
+  #endregion Variablen initialisieren
 
 
   Add-Type -AssemblyName System.Windows.Forms
   #region begin functions
+
+  function Get-LoudnessInfo {
+    param (
+        [string]$filePath
+    )
+        
+    try {
+        # Für Windows: Nutze NUL statt /dev/null
+        # Führe ffmpeg mit der Lautstärkeanalyse über ebur128 aus - Ausgabe in Variable erfassen
+        $tempOutputFile = [System.IO.Path]::GetTempFileName()
+        $ffmpegProcess = Start-Process -FilePath $ffmpgexe -ArgumentList "-i", "`"$($oldfile)`"", "-hide_banner", "-filter_complex", "ebur128=metadata=1", "-f", "null", "NUL" -NoNewWindow -PassThru -RedirectStandardError $tempOutputFile
+        $ffmpegProcess.WaitForExit()
+         Write-Host "Analysieren fertig" -ForegroundColor Green
+
+        # Lese die Ausgabe aus der temporären Datei
+        $ffmpegOutput = Get-Content -Path $tempOutputFile -Raw
+           
+        # Lösche die temporäre Datei
+        Remove-Item -Path $tempOutputFile -Force -ErrorAction SilentlyContinue
+        if ($ffmpegOutput -match "I:\s*([-\d\.]+)\s*LUFS") {
+          $integratedLoudness = [double]$matches[1]
+          Write-Host "Integrierte Lautheit für $($oldfile): $integratedLoudness LUFS" -ForegroundColor yellow
+        } else {
+          if ($ffmpegOutput -match "Error|Invalid") {
+            Write-Host "Fehler beim Verarbeiten von $($oldfile):" -ForegroundColor Red
+            Write-Host $ffmpegOutput -ForegroundColor Red #Ausgabe der Fehlermeldung
+          }
+        }
+        return $ffmpegOutput
+    }
+    catch {
+        Write-Host "Fehler beim Ausführen von FFmpeg: $_" -ForegroundColor Red
+        # Überprüfe, ob FFmpeg Fehler ausgibt
+    
+        return $null
+    }
+}
+
   #If Season in Path set encoded video to 720p else use movie Settings
   function Test-Series  {
     if ($file.DirectoryName -like $seriessessonfolder)
@@ -63,7 +104,7 @@ try
     $script:zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
     $script:zahlffmpg = (Get-Process -Name 'FFmpeg*').count
     $script:Auslastung = (Get-WmiObject -Class win32_processor | Measure-Object -Property LoadPercentage -Average).Average
-    Write-Host -Object "Auslastung : $Auslastung"
+    Write-Host -Object "Auslastung : $($script:Auslastung)"
     Write-Host -Object "Handbrakeinstanzen : $zahlhandb"
     if ($zahlhandb -lt 2 -and $Auslastung -lt 75)
     {
@@ -161,7 +202,6 @@ try
       Write-Host -Object $newfile 'existiert nicht'
     }
   }
-
   function Get-Audiocount  {
     $audiocountnew = (Get-MediaInfoValue -Path $newfile -Kind General -Parameter 'AudioCount')
     if ($audiocountnew -lt '1')
@@ -171,7 +211,6 @@ try
       continue
     }
   }
-       
   function Compare-videolength  {
     $videodaueralt = (Get-MediaInfoValue -Path $oldfile -Kind General -Parameter 'Duration')
     $videodaueraltminuten = [math]::Floor($videodaueralt/60000)
@@ -192,7 +231,6 @@ try
       continue
     }
   }
-
   function Get-newnfofile  {
     if([IO.File]::Exists($oldfilenfo) -AND [IO.File]::Exists($newfilenfo))
     {
@@ -209,7 +247,6 @@ try
       }
     }
   }
-
   function Remove-newmedia  {
     if([IO.File]::Exists($newfilebildneuclearlogopng))
     {
@@ -323,7 +360,7 @@ try
   #Encode Video only with HandbrtakeCli
   function Invoke-HandbrakeEncoderaudiocopy  {
     $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
-    Variable-Instanzen
+    Get-VariableInstanzen
     if ($zahlhandb -lt $zahlhandbmax -and $Auslastung -lt 75)
     {
       Write-Host -Object "$zahlhandb / $zahlhandbmax"
@@ -349,18 +386,18 @@ try
         }
         Start-Sleep -Seconds $waitprocess
         $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
-        Variable-Instanzen
+        Get-VariableInstanzen # Messung der Instanzen von FFMPEG und Handbrake
       }
       $wartehb = 0
       if($series720p -eq 0)
       {
         Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium --vfr --enable-hw-decoding `"$HBHWDec`" --quality 22 --subtitle-lang-list `"$subtitlelanglist`"  --audio-lang-list `"$audiotitlelanglist`" --first-subtitle -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
-        Write-Oldfileitem
+        Write-Oldfileitem # Liste der encodierten Dateien
       }
       if($series720p -eq 1)
       {
         Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset medium -l 720 --loose-anamorphic --keep-display-aspect --vfr --enable-hw-decoding `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle  -E `"$handbrakeaudiocodec`" -i `"$oldfile`" -o `"$newfile`""
-        Write-Oldfileitem
+        Write-Oldfileitem # Liste der encodierten Dateien
       }
     }
   }
@@ -395,8 +432,8 @@ $filelist = Get-ChildItem -Path "$destFolder" -Include $extensions -Recurse
       $i++
       #region begin Files
       $oldfile = $file.DirectoryName + '\' + $file.BaseName + $file.Extension
-      if($oldfile -eq $newfile) #$newfile from loop before
-      {
+      if ($oldfile -match "_neu") {
+        Write-Host "Überspringe bereits transkodierte Datei: $($oldfile) (Name)" -ForegroundColor green
         continue
       }
       $newfile = $file.DirectoryName + '\' + $file.BaseName + '.neu' + $zielextension
@@ -427,8 +464,9 @@ $filelist = Get-ChildItem -Path "$destFolder" -Include $extensions -Recurse
       [Int]$videoresH = Get-MediaInfoValue -Path $oldfile -Kind 'Video' -Parameter 'Height'
       $videodauerminuten = [math]::Floor($videodauer/60000)
       #endregion getting Mediainfo
-    
-      Variable-Instanzen
+
+      $ffmpegOutput = Get-LoudnessInfo -filePath $file.FullName # Ruft die Funktion Get-LoudnessInfo auf, um die Lautstärkeinformationen der Datei zu analysieren.
+      Get-VariableInstanzen #Messung der Instanzen von FFMPEG und Handbrake
 
       #region begin Write host
       Clear-Host
@@ -443,9 +481,9 @@ $filelist = Get-ChildItem -Path "$destFolder" -Include $extensions -Recurse
       Write-Host -Object "Handbrake Instanzen : $zahlhandb / $zahlhandbmax"
       Write-Host -Object -Step--------------------------------------------------------------------------
       #endregion Write host
-      Test-NewFileExists
-      Test-Series
-
+      Test-NewFileExists #Check ob die encodierte Datei schon existiert
+      Test-Series #Check ob Serie oder Film
+  
       #ist AAC und ist HEVC
       if ($audioformat -eq ${audio-codec-aac} -AND $videoformat -eq ${video-codec-hevc})
       {
@@ -457,8 +495,8 @@ $filelist = Get-ChildItem -Path "$destFolder" -Include $extensions -Recurse
         {
           Write-Host -Object 'Handbrake copy audio - Scale to 720P'
           $handbrakeaudiocodec = 'copy'
-          check-ignore
-          Handbrake-Encoderaudiocopy
+          check-ignore #Check for .ignore file
+          Handbrake-Encoderaudiocopy #Convert video to 720P and copy audio
           continue
         }
       }
@@ -472,8 +510,8 @@ $filelist = Get-ChildItem -Path "$destFolder" -Include $extensions -Recurse
           $aacbitrate = ${audio-codec-bitrate-256}
           $aachz = '48000'
           Write-Host -Object 'FFMPEG Surround copy Video'
-          check-ignore
-          Invoke-FFmpegEncode
+          check-ignore #Check for .ignore file
+          Invoke-FFmpegEncode #convert Audio and copy Video
 
           continue
         }
@@ -483,8 +521,8 @@ $filelist = Get-ChildItem -Path "$destFolder" -Include $extensions -Recurse
           $aacbitrate = ${audio-codec-bitrate-128}
           $aachz = '44100'
           Write-Host -Object 'FFMPEG Stereo copy Video'
-          Test-IgnoreFile
-          Invoke-FFmpegEncode
+          Test-IgnoreFile #Check for .ignore file
+          Invoke-FFmpegEncode #convert Audio and copy Video
           continue
         }
       }
@@ -501,8 +539,8 @@ $filelist = Get-ChildItem -Path "$destFolder" -Include $extensions -Recurse
           $handbrakehz = '48'
           $hbmixdown = '5point1'
           Write-Host -Object 'Handbrake Surround full convert'
-          Test-IgnoreFile
-          Invoke-HandbrakeEncoderFull
+          Test-IgnoreFile #Check for .ignore file
+          Invoke-HandbrakeEncoderFull #Convert Surround Audio and Video
           continue
         }
         #stereo oder mono
@@ -514,8 +552,8 @@ $filelist = Get-ChildItem -Path "$destFolder" -Include $extensions -Recurse
           $handbrakenormalize = '1'
           $hbmixdown = 'stereo'
           Write-Host -Object 'Handbrake Stereo full convert'
-          Test-IgnoreFile
-          Invoke-HandbrakeEncoderFull
+          Test-IgnoreFile #Check for .ignore file
+          Invoke-HandbrakeEncoderFull #Convert Stereo Audio and Video
           continue
         }
       }
@@ -525,12 +563,12 @@ $filelist = Get-ChildItem -Path "$destFolder" -Include $extensions -Recurse
       {
         Write-Host -Object 'Handbrake copy audio'
         $handbrakeaudiocodec = 'copy'
-        Test-IgnoreFile
-        Invoke-HandbrakeEncoderaudiocopy
+        Test-IgnoreFile #Check for .ignore file
+        Invoke-HandbrakeEncoderaudiocopy #Convert Video and copy Audio
         continue
       }
     }
-    Test-Newfile
+    Test-Newfile #Check if newfile exists
   }
   else
   {

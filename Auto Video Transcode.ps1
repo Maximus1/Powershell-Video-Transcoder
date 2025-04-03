@@ -6,7 +6,7 @@ $ffmpegPath = "F:\media-autobuild_suite-master\local64\bin-video\ffmpeg.exe"
 
 # Ziel-Lautheit in LUFS (z. B. -14 für YouTube, -23 für Rundfunk)
 $targetLoudness = -18
-
+$filePath = ''
 # Encoder-Voreinstellungen (können angepasst werden)
 $encoderPreset = 'medium'
 $audioCodecBitrate192 = '192k'
@@ -133,7 +133,6 @@ function Get-MediaInfo {
 
     return $mediaInfo
 }
-
 function Get-MediaInfo2 { #keine file vorhanden prüfung
     param (
         [string]$filePath
@@ -196,6 +195,7 @@ function Get-MediaInfo2 { #keine file vorhanden prüfung
             Write-Host "WARNUNG: Konnte Audiokanäle nicht aus der FFmpeg-Ausgabe extrahieren" -ForegroundColor Yellow
             $mediaInfo.AudioChannels = 0
         }
+        
     }
     catch {
         Write-Host "Fehler beim Abrufen der Mediendaten: $_" -ForegroundColor Red
@@ -205,7 +205,6 @@ function Get-MediaInfo2 { #keine file vorhanden prüfung
     }
     return $mediaInfo
 }
-
 
 # Funktion zur Lautstärkeanalyse mit FFmpeg
 function Get-LoudnessInfo {
@@ -248,28 +247,33 @@ function Set-VolumeGain {
 
     try {
         # FFmpeg-Argumente basierend auf der Anzahl der Audiokanäle erstellen
+        Write-Host "Starte FFmpeg zur Lautstärkeanpassung..." -NoNewline -ForegroundColor Cyan
         $ffmpegArguments = @(
-            "-y", # Überschreibe Ausgabedateien ohne Nachfrage
-            "-i", "`"$($filePath)`"", # Eingabedatei
             "-hide_banner", # FFmpeg-Banner ausblenden
-            "-af", "volume=${gain}dB" # Lautstärke anpassen
+            "-loglevel", "error",
+            "-stats", # Statistiken anzeigen
+            "-y", # Überschreibe Ausgabedateien ohne Nachfrage
+            "-i", "`"$($filePath)`"" # Eingabedatei            
         )
 
         # konvertieren, wenn der Video Codec nicht HEVC ist
         if ($videoCodec -ne $videoCodecHEVC -AND -not $force720p) {
+            Write-Host "Video Transode..." -NoNewline -ForegroundColor Cyan
             $ffmpegArguments += @(
                 "-c:v", "libx265", # Video-Codec auf HEVC setzen
                 "-preset", $encoderPreset # Encoder-Voreinstellung verwenden
                 "-crf", "23" # CRF-Wert für die Qualität
             )
-        } elseif ($force720p) {
+        } 
+        if ($force720p) {
+            Write-Host "Video transcoe mit resize..." -NoNewline -ForegroundColor Cyan
             $ffmpegArguments += @(
                 "-c:v", "libx265", # Video-Codec auf HEVC setzen
-                "-preset", $encoderPreset # Encoder-Voreinstellung verwenden
+                "-preset", $encoderPreset, # Encoder-Voreinstellung verwenden
                 "-crf", "23", # CRF-Wert für die Qualität
                 "-vf", "scale=1280:720" # Auflösung auf 720p skalieren
             )
-        } else {
+        } if ($videoCodec -eq $videoCodecHEVC -AND -not $force720p) {
             # Video-Codec beibehalten, wenn er bereits HEVC ist
             $ffmpegArguments += @(
                 "-c:v", "copy" # Video Codec kopieren
@@ -277,34 +281,41 @@ function Set-VolumeGain {
         }
 
         if ($audioChannels -gt 2) {
-        $ffmpegArguments += @(
-            "-c:a", "libfdk_aac", # Audio-Codec auf AAC setzen
-            "-profile:a", "aac_he", # AAC-Profil setzen
-            "-ac", $audioChannels, # Anzahl der Audiokanäle beibehalten
-            "-channel_layout", "5.1" # Kanal-Layout setzen
+            Write-Host "Audio transcode Surround..." -NoNewline -ForegroundColor Cyan
+            $ffmpegArguments += @(
+                "-c:a", "libfdk_aac", # Audio-Codec auf AAC setzen
+                "-profile:a", "aac_he", # AAC-Profil setzen
+                "-ac", $audioChannels, # Anzahl der Audiokanäle beibehalten
+                "-channel_layout", "5.1" # Kanal-Layout setzen
             )
         }
 
         if ($audioChannels -eq 2) { 
+            Write-Host "Audio transcode Stereo..." -NoNewline -ForegroundColor Cyan
             $ffmpegArguments += @(
-            "-b:a", $audioCodecBitrate192 # Audio-Bitrate setzen
+                "-b:a", $audioCodecBitrate192 # Audio-Bitrate setzen
             )
         } else {
+            Write-Host "Audio transcode Mono..." -NoNewline -ForegroundColor Cyan
             $ffmpegArguments += @(
-            "-b:a", $audioCodecBitrate128 # Audio-Bitrate setzen
+                "-b:a", $audioCodecBitrate128 # Audio-Bitrate setzen
             )
         
         }
         $ffmpegArguments += @(
+            Write-Host "Lautstärke anpassung und Metadaten..."  -ForegroundColor Cyan
+            "-af", "volume=${gain}dB", # Lautstärke anpassen
             "-c:s", "copy", # Untertitel kopieren
             "-metadata", "LUFS=$targetLoudness", # LUFS-Metadaten setzen
             "-metadata", "gained=$gain", # Gain-Metadaten setzen
             "-metadata", "normalized=true", # Normalisierungs-Metadaten setzen
             "`"$($outputFile)`"" # Ausgabedatei
         )
+        
+        Write-Host "FFmpeg-Argumente: $($ffmpegArguments -join ' ')" -ForegroundColor DarkCyan
 
         # FFmpeg-Prozess starten
-        $process = Start-Process -FilePath $ffmpegPath -ArgumentList $ffmpegArguments -NoNewWindow -Wait -PassThru -ErrorAction Stop
+        Start-Process -FilePath $ffmpegPath -ArgumentList $ffmpegArguments -NoNewWindow -Wait -PassThru -ErrorAction Stop
 
         Write-Host "Lautstärkeanpassung abgeschlossen für: $($filePath)" -ForegroundColor Green
     }
@@ -367,14 +378,21 @@ function Cleanup-Files {
 
     try {
         # Temporäre Datei für Umbenennung
-        $tempFile = [System.IO.Path]::Combine((Split-Path -Path $sourceFile), "$([System.IO.Path]::GetFileNameWithoutExtension($sourceFile))_temp$([System.IO.Path]::GetExtension($sourceFile))")
+        # Datei umbenennen, wenn Test-OutputFile $true zurückgibt
+        if ($true) {
+            $tempFile = [System.IO.Path]::Combine((Split-Path -Path $sourceFile), "$([System.IO.Path]::GetFileNameWithoutExtension($sourceFile))_temp$([System.IO.Path]::GetExtension($sourceFile))")
 
-        # Datei umbenennen mit Zwischenschritt um Namenskollisionen zu vermeiden
-        Rename-Item -Path $outputFile -NewName $tempFile -Force
-        Remove-Item -Path $sourceFile -Force
-        Rename-Item -Path $tempFile -NewName ([System.IO.Path]::GetFileName($sourceFile)) -Force
+            # Datei umbenennen mit Zwischenschritt um Namenskollisionen zu vermeiden
+            Rename-Item -Path $outputFile -NewName $tempFile -Force
+            Remove-Item -Path $sourceFile -Force
+            Rename-Item -Path $tempFile -NewName ([System.IO.Path]::GetFileName($sourceFile)) -Force
 
-        Write-Host "  Erfolg: Quelldatei gelöscht und normalisierte Datei umbenannt zu $([System.IO.Path]::GetFileName($sourceFile))" -ForegroundColor Green
+            Write-Host "  Erfolg: Quelldatei gelöscht und normalisierte Datei umbenannt zu $([System.IO.Path]::GetFileName($sourceFile))" -ForegroundColor Green
+        } else {
+            Write-Host "  FEHLER: Test-OutputFile ist fehlgeschlagen. Test-OutputFile wird gelöscht." -ForegroundColor Red
+            Remove-Item -Path $outputFile -Force
+
+        }
     }
     catch {
         Write-Host "  FEHLER bei Umbenennung/Löschen: $_" -ForegroundColor Red
@@ -421,7 +439,7 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
         }
 
         # Überprüfen, ob der Dateiname dem Serienmuster entspricht (z. B. S01E01)
-        if ($file.BaseName -match "S\d+E\d+") {
+        if ($file.FullName -match "S\d+E\d+") {
             Write-Host "Datei erkannt als Serientitel. Prüfe auf 720p anpassung." -ForegroundColor Yellow
             # Setze Variable, um die 720p-Auflösung zu erzwingen
             if ($sourceInfo.Resolution -match "^(\d+)x(\d+)$") {
