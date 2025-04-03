@@ -7,6 +7,7 @@ $ffmpegPath = "F:\media-autobuild_suite-master\local64\bin-video\ffmpeg.exe"
 # Ziel-Lautheit in LUFS (z. B. -14 für YouTube, -23 für Rundfunk)
 $targetLoudness = -18
 $filePath = ''
+
 # Encoder-Voreinstellungen (können angepasst werden)
 $encoderPreset = 'medium'
 $audioCodecBitrate192 = '192k'
