@@ -275,6 +275,7 @@ function Set-VolumeGain {
                 "-vf", "scale=1280:720" # Auflösung auf 720p skalieren
             )
         } if ($videoCodec -eq $videoCodecHEVC -AND -not $force720p) {
+            Write-Host "Video copy..." -NoNewline -ForegroundColor Cyan
             # Video-Codec beibehalten, wenn er bereits HEVC ist
             $ffmpegArguments += @(
                 "-c:v", "copy" # Video Codec kopieren
@@ -296,12 +297,13 @@ function Set-VolumeGain {
             $ffmpegArguments += @(
                 "-b:a", $audioCodecBitrate192 # Audio-Bitrate setzen
             )
-        } else {
+        } 
+        
+        if ($audioChannels -le 1) {
             Write-Host "Audio transcode Mono..." -NoNewline -ForegroundColor Cyan
             $ffmpegArguments += @(
                 "-b:a", $audioCodecBitrate128 # Audio-Bitrate setzen
-            )
-        
+            )        
         }
         $ffmpegArguments += @(
             Write-Host "Lautstärke anpassung und Metadaten..."  -ForegroundColor Cyan
