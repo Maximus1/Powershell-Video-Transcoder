@@ -1,9 +1,13 @@
+[![CodeFactor](https://www.codefactor.io/repository/github/maximus1/powershell-video-transcoder/badge/main)](https://www.codefactor.io/repository/github/maximus1/powershell-video-transcoder/overview/main)
+[![Codacy Badge](https://app.codacy.com/project/badge/Grade/0ec11745ed0c4e268fa6fd2316f53b57)](https://app.codacy.com/gh/Maximus1/Powershell-Video-Transcoder/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
+[![Donate via PayPal](https://img.shields.io/badge/Donate-PayPal-blue.svg)](https://www.paypal.com/donate/?hosted_button_id=NLQMQSQB7Y79N)
+
 ~~# Powershell-Video-Transcoder~~
 Auto Video Transcode
 
 Transcode your Videos (Movies and Episodes) from AVI, MP4, MKV to MKV with AAC and HEVC
 
-INFO: your FFMPEG needs to support libfdk_aac. Compile it by yourself (https://github.com/m-ab-s/media-autobuild_suite)
+INFO: your FFMPEG needs to support libfdk_aac. Compile it by yourself (<https://github.com/m-ab-s/media-autobuild_suite>)
 
 This Script lets you choose a Folder and scanns recursive for AVI MP4 and MKV files.
 
@@ -46,6 +50,4 @@ Handbrake Instanzen : 0 / 2
 
 -Step--------------------------------------------------------------------------
 
-
-Please feel free to contribute.
 My Powershell skills aren't that good, but with your help the script might be really good.
