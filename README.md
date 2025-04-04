@@ -1,3 +1,5 @@
+[![CodeFactor](https://www.codefactor.io/repository/github/maximus1/powershell-video-transcoder/badge/main)](https://www.codefactor.io/repository/github/maximus1/powershell-video-transcoder/overview/main)
+
 ~~# Powershell-Video-Transcoder~~
 Auto Video Transcode
 
