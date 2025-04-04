@@ -1,4 +1,5 @@
 [![CodeFactor](https://www.codefactor.io/repository/github/maximus1/powershell-video-transcoder/badge/main)](https://www.codefactor.io/repository/github/maximus1/powershell-video-transcoder/overview/main)
+[![Donate via PayPal](https://img.shields.io/badge/Donate-PayPal-blue.svg)](https://www.paypal.com/donate/?hosted_button_id=NLQMQSQB7Y79N)
 
 ~~# Powershell-Video-Transcoder~~
 Auto Video Transcode
@@ -51,3 +52,5 @@ Handbrake Instanzen : 0 / 2
 
 Please feel free to contribute.
 My Powershell skills aren't that good, but with your help the script might be really good.
+
+
