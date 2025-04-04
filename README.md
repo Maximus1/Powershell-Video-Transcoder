@@ -3,8 +3,7 @@ Auto Video Transcode
 
 Transcode your Videos (Movies and Episodes) from AVI, MP4, MKV to MKV with AAC and HEVC
 
-INFO: your FFMPEG needs to support libfdk_aac. Compile it by yourself or use mine.
-It is compiled with https://github.com/m-ab-s/media-autobuild_suite
+INFO: your FFMPEG needs to support libfdk_aac. Compile it by yourself (https://github.com/m-ab-s/media-autobuild_suite)
 
 This Script lets you choose a Folder and scanns recursive for AVI MP4 and MKV files.
 
