@@ -12,34 +12,25 @@ $filePath = ''
 $encoderPreset = 'medium'
 $audioCodecBitrate192 = '192k'
 $audioCodecBitrate128 = '128k'
-$audioCodecAAC = 'AAC'
 $videoCodecHEVC = 'HEVC'
 $force720p = $false
-
-# Sprachen für Audio und Untertitel (werden beibehalten)
-$languagesAudioVideo = 'ger,deu,de,und,,'
 
 # Standard-Dateierweiterung für die Ausgabe
 $targetExtension = '.mkv'
 #endregion
 
 #region Hilfsfunktionen
-
-# Funktion zum Extrahieren von Mediendaten mit FFmpeg
-function Get-MediaInfo {
+function Get-MediaInfo {# Funktion zum Extrahieren von Mediendaten mit FFmpeg
     param (
         [string]$filePath # Pfad zur Eingabedatei
     )
-
     $mediaInfo = @{} # Hashtable zum Speichern der Mediendaten
-
     try {
         # Prüfen, ob die Datei existiert
         if (!(Test-Path $filePath)) {
             Write-Host "FEHLER: Datei nicht gefunden: $filePath" -ForegroundColor Red
             return $null
         }
-
         # FFmpeg-Prozess starten, um Mediendaten zu extrahieren
         $startInfo = New-Object System.Diagnostics.ProcessStartInfo
         $startInfo.FileName = $ffmpegPath
@@ -68,7 +59,6 @@ function Get-MediaInfo {
             Write-Host "Überspringe bereits normalisierte Datei: $($file.Name) (Tag)" -ForegroundColor green
             continue
         }
-
         # Dauer extrahieren
         if ($infoOutput -match "Duration:\s*(\d+):(\d+):(\d+)\.(\d+)") {
             $hours = [int]$matches[1]
@@ -85,7 +75,6 @@ function Get-MediaInfo {
             $mediaInfo.Duration = 0
             $mediaInfo.DurationFormatted = "00:00:00.00"
         }
-
         # Audiokanäle extrahieren
         if ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Audio:.*?,\s+\d+\s+Hz,\s+([\d.]+)") {
             $mediaInfo.AudioChannels = $matches[1]
@@ -100,7 +89,6 @@ function Get-MediaInfo {
             Write-Host "WARNUNG: Konnte Audiokanäle nicht aus der FFmpeg-Ausgabe extrahieren" -ForegroundColor Yellow
             $mediaInfo.AudioChannels = 0
         }
-
         # Audio Codec extrahieren
         if ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Audio:\s*(\w+)") {
             $mediaInfo.AudioCodec = $matches[1]
@@ -109,7 +97,6 @@ function Get-MediaInfo {
             Write-Host "WARNUNG: Konnte Audio Codec nicht aus der FFmpeg-Ausgabe extrahieren" -ForegroundColor Yellow
             $mediaInfo.AudioCodec = "Unbekannt"
         }
-
         # Video Codec extrahieren
         if ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Video:\s*(\w+)") {
             $mediaInfo.VideoCodec = $matches[1]
@@ -131,16 +118,13 @@ function Get-MediaInfo {
         Write-Host "FEHLER: Fehler beim Abrufen der Mediendaten: $_" -ForegroundColor Red
         return $null
     }
-
     return $mediaInfo
 }
 function Get-MediaInfo2 { #keine file vorhanden prüfung
     param (
         [string]$filePath
     )
-    
     $mediaInfo = @{}
-    
     try {
         # Führe FFmpeg aus, um Informationen über die Datei zu erhalten
         # Führe expliziten Befehl statt Umleitung aus, um korrekte Fehlerausgabe zu erhalten
@@ -159,18 +143,15 @@ function Get-MediaInfo2 { #keine file vorhanden prüfung
         
         $infoOutput = $process.StandardError.ReadToEnd()
         $process.WaitForExit()
-  
         # Extrahiere die Dauer mit einem verbesserten Regex-Pattern
         if ($infoOutput -match "Duration:\s*(\d+):(\d+):(\d+)\.(\d+)") {
             $hours = [int]$matches[1]
             $minutes = [int]$matches[2]
             $seconds = [int]$matches[3]
             $milliseconds = [int]$matches[4]
-            
             $totalSeconds = $hours * 3600 + $minutes * 60 + $seconds + ($milliseconds / 100)
             $mediaInfo.Duration = $totalSeconds
             $mediaInfo.DurationFormatted = "{0:D2}:{1:D2}:{2:D2}.{3:D2}" -f $hours, $minutes, $seconds, $milliseconds
-            
             Write-Host "Extrahierte Dauer: $($mediaInfo.DurationFormatted)" -ForegroundColor DarkCyan
         }
         else {
@@ -178,7 +159,6 @@ function Get-MediaInfo2 { #keine file vorhanden prüfung
             $mediaInfo.Duration = 0
             $mediaInfo.DurationFormatted = "00:00:00.00"
         }
-        
         # Extrahiere die Anzahl der Audiokanäle mit verbessertem Regex
         if ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Audio:.*?,\s+\d+\s+Hz,\s+([\d.]+)") {
             $mediaInfo.AudioChannels = $matches[1]
@@ -196,7 +176,6 @@ function Get-MediaInfo2 { #keine file vorhanden prüfung
             Write-Host "WARNUNG: Konnte Audiokanäle nicht aus der FFmpeg-Ausgabe extrahieren" -ForegroundColor Yellow
             $mediaInfo.AudioChannels = 0
         }
-        
     }
     catch {
         Write-Host "Fehler beim Abrufen der Mediendaten: $_" -ForegroundColor Red
@@ -206,28 +185,21 @@ function Get-MediaInfo2 { #keine file vorhanden prüfung
     }
     return $mediaInfo
 }
-
-# Funktion zur Lautstärkeanalyse mit FFmpeg
-function Get-LoudnessInfo {
+function Get-LoudnessInfo {# Funktion zur Lautstärkeanalyse mit FFmpeg
     param (
         [string]$filePath # Pfad zur Eingabedatei
     )
-
     try {
         # Temporäre Datei erstellen, um die FFmpeg-Ausgabe zu speichern
         $tempOutputFile = [System.IO.Path]::GetTempFileName()
-
         # FFmpeg-Prozess starten, um die Lautstärke zu analysieren
         Write-Host "Starte FFmpeg zur Lautstärkeanalyse..." -ForegroundColor Cyan
         $ffmpegProcess = Start-Process -FilePath $ffmpegPath -ArgumentList "-i", "`"$($filePath)`"", "-hide_banner", "-filter_complex", "ebur128=metadata=1", "-f", "null", "NUL" -NoNewWindow -PassThru -RedirectStandardError $tempOutputFile
         $ffmpegProcess.WaitForExit()
-
         # Ausgabe aus der temporären Datei lesen
         $ffmpegOutput = Get-Content -Path $tempOutputFile -Raw
-
         # Temporäre Datei löschen
         Remove-Item -Path $tempOutputFile -Force -ErrorAction SilentlyContinue
-
         return $ffmpegOutput
     }
     catch {
@@ -235,9 +207,7 @@ function Get-LoudnessInfo {
         return $null
     }
 }
-
-# Funktion zur Anpassung der Lautstärke mit FFmpeg
-function Set-VolumeGain {
+function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
     param (
         [string]$filePath, # Pfad zur Eingabedatei
         [double]$gain, # Der anzuwendende Gain-Wert in dB
@@ -245,7 +215,6 @@ function Set-VolumeGain {
         [int]$audioChannels, # Anzahl der Audiokanäle in der Eingabedatei
         [string]$videoCodec # Video Codec der Eingabedatei
     )
-
     try {
         # FFmpeg-Argumente basierend auf der Anzahl der Audiokanäle erstellen
         Write-Host "Starte FFmpeg zur Lautstärkeanpassung..." -NoNewline -ForegroundColor Cyan
@@ -256,7 +225,6 @@ function Set-VolumeGain {
             "-y", # Überschreibe Ausgabedateien ohne Nachfrage
             "-i", "`"$($filePath)`"" # Eingabedatei            
         )
-
         # konvertieren, wenn der Video Codec nicht HEVC ist
         if ($videoCodec -ne $videoCodecHEVC -AND -not $force720p) {
             Write-Host "Video Transode..." -NoNewline -ForegroundColor Cyan
@@ -281,7 +249,6 @@ function Set-VolumeGain {
                 "-c:v", "copy" # Video Codec kopieren
             ) 
         }
-
         if ($audioChannels -gt 2) {
             Write-Host "Audio transcode Surround..." -NoNewline -ForegroundColor Cyan
             $ffmpegArguments += @(
@@ -291,14 +258,12 @@ function Set-VolumeGain {
                 "-channel_layout", "5.1" # Kanal-Layout setzen
             )
         }
-
         if ($audioChannels -eq 2) { 
             Write-Host "Audio transcode Stereo..." -NoNewline -ForegroundColor Cyan
             $ffmpegArguments += @(
                 "-b:a", $audioCodecBitrate192 # Audio-Bitrate setzen
             )
         } 
-        
         if ($audioChannels -le 1) {
             Write-Host "Audio transcode Mono..." -NoNewline -ForegroundColor Cyan
             $ffmpegArguments += @(
@@ -314,87 +279,67 @@ function Set-VolumeGain {
             "-metadata", "normalized=true", # Normalisierungs-Metadaten setzen
             "`"$($outputFile)`"" # Ausgabedatei
         )
-        
         Write-Host "FFmpeg-Argumente: $($ffmpegArguments -join ' ')" -ForegroundColor DarkCyan
-
         # FFmpeg-Prozess starten
         Start-Process -FilePath $ffmpegPath -ArgumentList $ffmpegArguments -NoNewWindow -Wait -PassThru -ErrorAction Stop
-
         Write-Host "Lautstärkeanpassung abgeschlossen für: $($filePath)" -ForegroundColor Green
     }
     catch {
         Write-Host "FEHLER: Fehler bei der Lautstärkeanpassung: $_" -ForegroundColor Red
     }
 }
-
-# Überprüfe die Ausgabedatei, sobald der Prozess abgeschlossen ist
-function Test-OutputFile {
+function Test-OutputFile {# Überprüfe die Ausgabedatei, sobald der Prozess abgeschlossen ist
     param (
         [string]$outputFile,
         [string]$sourceFile,
         [object]$sourceInfo,
         [string]$targetExtension
         )
-
     Write-Host "Überprüfe die Ausgabedatei: $outputFile" -ForegroundColor Cyan
-
     # Warte kurz, um sicherzustellen, dass die Datei vollständig geschrieben wurde
     Start-Sleep -Seconds 2
-
     $outputInfo = Get-MediaInfo2 -filePath $outputFile
-
     # Überprüfe, ob die Ausgabedatei korrekt erfasst wurde
     if ($outputInfo.Duration -eq 0 -or $outputInfo.AudioChannels -eq 0) {
         Write-Host "  FEHLER: Konnte Mediendaten für die Ausgabedatei nicht korrekt extrahieren." -ForegroundColor Red
         return $false
     }
-
     Write-Host "  Quelldatei-Dauer: $($sourceInfo.DurationFormatted) | Audiokanäle: $($sourceInfo.AudioChannels)" -ForegroundColor Blue
     Write-Host "  Ausgabedatei-Dauer: $($outputInfo.DurationFormatted) | Audiokanäle: $($outputInfo.AudioChannels)" -ForegroundColor Blue
-
     # Überprüfe die Laufzeit (mit einer kleinen Toleranz von 1 Sekunde)
     $durationDiff = [Math]::Abs($sourceInfo.Duration - $outputInfo.Duration)
     if ($durationDiff -gt 1) {
         Write-Host "  WARNUNG: Die Laufzeiten unterscheiden sich um $durationDiff Sekunden!" -ForegroundColor Red
         return $false
     }
-
     Write-Host "  OK: Die Laufzeiten stimmen überein." -ForegroundColor Green
-
     # Überprüfe die Anzahl der Audiokanäle
     if ($sourceInfo.AudioChannels -ne $outputInfo.AudioChannels) {
         Write-Host "  WARNUNG: Die Anzahl der Audiokanäle hat sich geändert! (Quelle: $($sourceInfo.AudioChannels), Ausgabe: $($outputInfo.AudioChannels))" -ForegroundColor Red
         return $false
     }
-
     Write-Host "  OK: Die Anzahl der Audiokanäle ist gleich geblieben." -ForegroundColor Green
     return $true
 }
-
-# Funktion zum Aufräumen und Umbenennen von Dateien
-function Cleanup-Files {
+function Remove-Files {# Funktion zum Aufräumen und Umbenennen von Dateien
     param (
         [string]$outputFile,
         [string]$sourceFile,
         [string]$targetExtension
     )
-
     try {
         # Temporäre Datei für Umbenennung
         # Datei umbenennen, wenn Test-OutputFile $true zurückgibt
         if ($true) {
             $tempFile = [System.IO.Path]::Combine((Split-Path -Path $sourceFile), "$([System.IO.Path]::GetFileNameWithoutExtension($sourceFile))_temp$([System.IO.Path]::GetExtension($sourceFile))")
-
             # Datei umbenennen mit Zwischenschritt um Namenskollisionen zu vermeiden
             Rename-Item -Path $outputFile -NewName $tempFile -Force
             Remove-Item -Path $sourceFile -Force
             Rename-Item -Path $tempFile -NewName ([System.IO.Path]::GetFileName($sourceFile)) -Force
-
             Write-Host "  Erfolg: Quelldatei gelöscht und normalisierte Datei umbenannt zu $([System.IO.Path]::GetFileName($sourceFile))" -ForegroundColor Green
         } else {
             Write-Host "  FEHLER: Test-OutputFile ist fehlgeschlagen. Test-OutputFile wird gelöscht." -ForegroundColor Red
             Remove-Item -Path $outputFile -Force
-
         }
     }
     catch {
@@ -479,17 +424,14 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
             # Wenn der Gain größer als 0.1 dB ist, Lautstärke anpassen
             if ([math]::Abs($gain) -gt 0.2) {
                 Write-Host "Passe Lautstärke an um $gain dB" -ForegroundColor Yellow
-
                 # Ausgabedatei erstellen
                 $outputFile = [System.IO.Path]::Combine($file.DirectoryName, "$($file.BaseName)_normalized$($targetExtension)")
-
                 # Lautstärke anpassen
                 Set-VolumeGain -filePath $file.FullName -gain $gain -outputFile $outputFile -audioChannels $sourceInfo.AudioChannels -videoCodec $sourceInfo.VideoCodec
                 # Überprüfen der Ausgabedatei
                 Test-OutputFile -outputFile $outputFile -sourceFile $file.FullName -sourceInfo $sourceInfo -targetExtension $targetExtension
                 # Aufräumen und Umbenennen der Ausgabedatei
-                Cleanup-Files -outputFile $outputFile -sourceFile $file.FullName -targetExtension $targetExtension
-
+                Remove-Files -outputFile $outputFile -sourceFile $file.FullName -targetExtension $targetExtension
             }
             else {
                 Write-Host "Lautstärke bereits im Zielbereich. Keine Anpassung notwendig." -ForegroundColor Green
@@ -498,13 +440,6 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
         else {
             Write-Host "WARNUNG: Keine LUFS-Informationen gefunden. Überspringe Lautstärkeanpassung." -ForegroundColor Yellow
         }
-
- 
-
-        
-
-        
-
         Write-Host "Verarbeitung abgeschlossen für: $($file.FullName)" -ForegroundColor Green
         Write-Host "--------------------------------------------------" -ForegroundColor DarkGray
     }
@@ -520,11 +455,9 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
             Write-Host "  FEHLER: Konnte Datei nicht löschen $($normalizedFile.FullName): $_" -ForegroundColor Red
         }
     }
-
     Write-Host "Alle Dateien verarbeitet." -ForegroundColor Green
 }
 else {
     Write-Host "Ordnerauswahl abgebrochen." -ForegroundColor Yellow
 }
-
 #endregion
