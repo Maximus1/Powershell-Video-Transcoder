@@ -30,24 +30,30 @@ This Script lets you choose a Folder and scanns recursive for MKV files.
 
 
 
--Filestats---------------------------------------------------------------------
+Output to the console:
 
-MKV Batch Encoding File 333 of 4323 - 7.7%
-
-Processing : W:\Awesome Series\Staffel 01\S01E13 Awesone Episode.mp4
-
-Audiocount / Format / Channels : 1 / AAC / 2
-
-Videoformat / Resolution : AVC / 1920 : 1080
-
-VideoLaufzeit : 1266539 / 21
-
--Jobs--------------------------------------------------------------------------
-
-FFMPEG Instanzen : 0 / 10
-
-Handbrake Instanzen : 0 / 2
-
--Step--------------------------------------------------------------------------
+```text
+5329 MKV-Dateien verbleibend.
+Verarbeite Datei: Y:\Serie\Staffel 03\Serie - S03E02 - Tolle Folge.mkv
+Datei erkannt als Serientitel. Prüfe auf 720p anpassung.
+Aktuelle Auflösung: 1280x720. Keine Größenanpassung notwendig.
+Starte FFmpeg zur Lautstärkeanalyse...
+Passe Lautstärke an um 4.9 dB
+Starte FFmpeg zur Lautstärkeanpassung...Video copy...Audio transcode Stereo...Lautstärke anpassung und Metadaten...
+FFmpeg-Argumente: -hide_banner -loglevel error -stats -y -i "Y:\Serie - S03E02 - Tolle Folge.mkv" -c:v copy -b:a 192k -af volume=4.9dB -c:s copy -metadata LUFS=-18 -metadata gained=4.9 -metadata normalized=true "Y:\Serie - S03E02 - Tolle Folge_normalized.mkv"
+  5    31,56       2,86       0,02   14288   1 ffmpeg
+frame=33418 fps=1450 q=-1.0 Lsize=  639952KiB time=00:22:16.72 bitrate=3921.9kbits/s speed=  58x    
+Lautstärkeanpassung abgeschlossen für: Y:\Serie - S03E02 - Tolle Folge.mkv
+Überprüfe die Ausgabedatei: Y:\Serie - S03E02 - Tolle Folge_normalized.mkv
+Extrahierte Dauer: 00:22:16.74
+Audioformat ist stereo (2 Kanäle)
+  Quelldatei-Dauer: 00:22:16.73 | Audiokanäle: 2
+  Ausgabedatei-Dauer: 00:22:16.74 | Audiokanäle: 2
+  OK: Die Laufzeiten stimmen überein.
+  OK: Die Anzahl der Audiokanäle ist gleich geblieben.
+True
+  Erfolg: Quelldatei gelöscht und normalisierte Datei umbenannt zu Serie - S03E02 - Tolle Folge.mkv
+Verarbeitung abgeschlossen für: Y:\Serie - S03E02 - Tolle Folge.mkv
+```
 
 My Powershell skills aren't that good, but with your help the script might be really good.
