@@ -9,7 +9,7 @@ Transcode your Videos (Movies and Episodes) from AVI, MP4, MKV to MKV with AAC a
 
 INFO: your FFMPEG needs to support libfdk_aac. Compile it by yourself (<https://github.com/m-ab-s/media-autobuild_suite>)
 
-This Script lets you choose a Folder and scanns recursive for AVI MP4 and MKV files.
+This Script lets you choose a Folder and scanns recursive for MKV files.
 
 - It then counts the files corresponding to the filter.
 - Codecs, file size, dimensions, number of audio streams and more are measured for each file.
