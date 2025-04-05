@@ -5,7 +5,7 @@
 ~~# Powershell-Video-Transcoder~~
 Auto Video Transcode
 
-Transcode your Videos (Movies and Episodes) from AVI, MP4, MKV to MKV with AAC and HEVC
+Transcode your MKV Videos (Movies and Episodes)  with AAC and HEVC
 
 INFO: your FFMPEG needs to support libfdk_aac. Compile it by yourself (<https://github.com/m-ab-s/media-autobuild_suite>)
 
