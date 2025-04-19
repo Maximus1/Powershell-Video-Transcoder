@@ -15,6 +15,7 @@ $ffmpegPath = "F:\media-autobuild_suite-master\local64\bin-video\ffmpeg.exe"
 # Ziel-Lautheit in LUFS (z. B. -14 für YouTube, -23 für Rundfunk)
 $targetLoudness = -18
 $filePath = ''
+$extensions = @('*.mkv', '*.mp4', '*.avi', '*.m2ts')
 
 # Encoder-Voreinstellungen (können angepasst werden)
 $crfTarget = 23
@@ -86,45 +87,125 @@ function Get-MediaInfo {# Funktion zum Extrahieren von Mediendaten mit FFmpeg
             $mediaInfo.Duration = 0
             $mediaInfo.DurationFormatted = "00:00:00.00"
         }
-        # Audiokanäle extrahieren
-        if ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Audio:.*?,\s+\d+\s+Hz,\s+([\d.]+)") {
-            $mediaInfo.AudioChannels = $matches[1]
+        # Video Codec extrahieren (robuster, erkennt auch Klammern und weitere Zeichen)
+        if ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Video:\s*([^\s,]+)") {
+            $mediaInfo.VideoCodec = $matches[1]
         }
-        elseif ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Audio:.+?stereo") {
-            $mediaInfo.AudioChannels = 2
+        elseif ($infoOutput -match "Video:\s*([^\s,]+)") {
+            $mediaInfo.VideoCodec = $matches[1]
         }
-        elseif ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Audio:.+?mono") {
-            $mediaInfo.AudioChannels = 1
-        }
-        else {
-            Write-Host "WARNUNG: Konnte Audiokanäle nicht aus der FFmpeg-Ausgabe extrahieren" -ForegroundColor Yellow
-            $mediaInfo.AudioChannels = 0
-        }
-        Write-Host "Quelldatei-Dauer: $($mediaInfo.DurationFormatted1) | Audiokanäle: $($mediaInfo.AudioChannels)" -ForegroundColor DarkCyan
-        # Audio Codec extrahieren
-        if ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Audio:\s*(\w+)") {
-            $mediaInfo.AudioCodec = $matches[1]
-        }
-        else {
-            Write-Host "WARNUNG: Konnte Audio Codec nicht aus der FFmpeg-Ausgabe extrahieren" -ForegroundColor Yellow
-            $mediaInfo.AudioCodec = "Unbekannt"
-        }
-        # Video Codec extrahieren
-        if ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Video:\s*(\w+)") {
+        elseif ($infoOutput -match "Video:\s*([^\s,]+)\s*\(") {
             $mediaInfo.VideoCodec = $matches[1]
         }
         else {
-            Write-Host "WARNUNG: Konnte Video Codec nicht aus der FFmpeg-Ausgabe extrahieren" -ForegroundColor Yellow
             $mediaInfo.VideoCodec = "Unbekannt"
         }
-        # Auflösung extrahieren
+        # Auflösung extrahieren (robuster, erkennt auch Zeilen wie "720x576 [SAR ...]")
         if ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Video:.*?,\s+(\d+)x(\d+)") {
             $mediaInfo.Resolution = "$($matches[1])x$($matches[2])"
         }
+        elseif ($infoOutput -match "Video:.*?,\s*[^\s,]+,\s*(\d+)x(\d+)") {
+            $mediaInfo.Resolution = "$($matches[1])x$($matches[2])"
+        }
+        elseif ($infoOutput -match "Video:.*?(\d+)x(\d+)\s*\[SAR") {
+            $mediaInfo.Resolution = "$($matches[1])x$($matches[2])"
+        }
         else {
-            Write-Host "WARNUNG: Konnte Auflösung nicht aus der FFmpeg-Ausgabe extrahieren" -ForegroundColor Yellow
             $mediaInfo.Resolution = "Unbekannt"
         }
+        #check if interlaced
+        # Prüfe, ob das Video interlaced ist (mit idet-Filter)
+        try {
+            $startInfoIdet = New-Object System.Diagnostics.ProcessStartInfo
+            $startInfoIdet.FileName = $ffmpegPath
+            $startInfoIdet.Arguments = "-i `"$filePath`" -filter:v idet -frames:v 1500 -an -f null NUL"
+            $startInfoIdet.RedirectStandardError = $true
+            $startInfoIdet.UseShellExecute = $false
+            $startInfoIdet.CreateNoWindow = $true
+
+            $processIdet = New-Object System.Diagnostics.Process
+            $processIdet.StartInfo = $startInfoIdet
+            $processIdet.Start() | Out-Null
+            $idetOutput = $processIdet.StandardError.ReadToEnd()
+            $processIdet.WaitForExit()
+
+            # Suche nach idet summary
+            $multiFrameMatches = [regex]::Matches($idetOutput, "Multi frame detection:\s*TFF:\s*(\d+)\s*BFF:\s*(\d+)\s*Progressive:\s*(\d+)\s*Undetermined:\s*(\d+)")
+            if ($multiFrameMatches.Count -gt 0) {
+                $lastMatch = $multiFrameMatches[$multiFrameMatches.Count - 1]
+                $tff = [int]$lastMatch.Groups[1].Value
+                $bff = [int]$lastMatch.Groups[2].Value
+                $prog = [int]$lastMatch.Groups[3].Value
+                $undet = [int]$lastMatch.Groups[4].Value
+                $mediaInfo.IDET_TFF = $tff
+                $mediaInfo.IDET_BFF = $bff
+                $mediaInfo.IDET_Progressive = $prog
+                $mediaInfo.IDET_Undetermined = $undet
+                if (($tff + $bff) -gt $prog) {
+                    $mediaInfo.Interlaced = $true
+                    $interlaced = $true
+                } else {
+                    $mediaInfo.Interlaced = $false
+                    $interlaced = $false
+                }
+            } else {
+                $mediaInfo.Interlaced = $false
+                $interlaced = $false
+            }
+        }
+        catch {
+            $mediaInfo.Interlaced = $false
+            $interlaced = $false
+        }
+        # Audiokanäle extrahieren
+        # Versuche, die Anzahl der Audiokanäle aus verschiedenen FFmpeg-Ausgabeformaten zu extrahieren
+        if ($infoOutput -match "Audio:.*?,\s*\d+\s*Hz,\s*([0-9\.]+)\s*channels?") {
+            $mediaInfo.AudioChannels = [int]$matches[1]
+        }
+        elseif ($infoOutput -match "Audio:.*?,\s*\d+\s*Hz,\s*([a-zA-Z0-9\.\(\)\[\]\-]+),") {
+            # Erkenne Kanalbezeichnungen wie '5.1', '7.1', 'mono', 'stereo', '5.1(side)' etc.
+            $channelDesc = $matches[1]
+            switch -Regex ($channelDesc) {
+            "mono"   { $mediaInfo.AudioChannels = 1; break }
+            "stereo" { $mediaInfo.AudioChannels = 2; break }
+            "2\.1"   { $mediaInfo.AudioChannels = 3; break }
+            "3\.0"   { $mediaInfo.AudioChannels = 3; break }
+            "4\.0"   { $mediaInfo.AudioChannels = 4; break }
+            "5\.0"   { $mediaInfo.AudioChannels = 5; break }
+            "5\.1"   { $mediaInfo.AudioChannels = 6; break }
+            "6\.1"   { $mediaInfo.AudioChannels = 7; break }
+            "7\.1"   { $mediaInfo.AudioChannels = 8; break }
+            default  {
+                # Versuche, eine Zahl am Anfang zu extrahieren (z.B. '6 channels')
+                if ($channelDesc -match "^(\d+)") {
+                $mediaInfo.AudioChannels = [int]$matches[1]
+                } else {
+                $mediaInfo.AudioChannels = 0
+                }
+            }
+            }
+        }
+        elseif ($infoOutput -match "Audio:.+?stereo") {
+            $mediaInfo.AudioChannels = 2
+        }
+        elseif ($infoOutput -match "Audio:.+?mono") {
+            $mediaInfo.AudioChannels = 1
+        }
+        else {
+            $mediaInfo.AudioChannels = 0
+        }
+        # Audio Codec extrahieren (robusteres Pattern, um auch Klammern und Bindestriche zu erfassen)
+        if ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Audio:\s*([\w\-\d]+)") {
+            $mediaInfo.AudioCodec = $matches[1]
+        }
+        elseif ($infoOutput -match "Audio:\s*([\w\-\d]+)") {
+            $mediaInfo.AudioCodec = $matches[1]
+        }
+        else {
+            $mediaInfo.AudioCodec = "Unbekannt"
+        }
+        Write-Host "Video: $($mediaInfo.DurationFormatted1) | $($mediaInfo.VideoCodec) | $($mediaInfo.Resolution) | Interlaced: $($mediaInfo.Interlaced)" -ForegroundColor DarkCyan
+        Write-Host "Audio: $($mediaInfo.AudioChannels) Kanäle: | $($mediaInfo.AudioCodec)" -ForegroundColor DarkCyan
     }
     catch {
         Write-Host "FEHLER: Fehler beim Abrufen der Mediendaten: $_" -ForegroundColor Red
@@ -171,23 +252,82 @@ function Get-MediaInfo2 { #keine file vorhanden prüfung
             $mediaInfo.Duration = 0
             $mediaInfo.DurationFormatted = "00:00:00.00"
         }
-        # Extrahiere die Anzahl der Audiokanäle mit verbessertem Regex
-        if ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Audio:.*?,\s+\d+\s+Hz,\s+([\d.]+)") {
-            $mediaInfo.AudioChannels = $matches[1]
-            Write-Host "Extrahierte Audiokanäle: $($mediaInfo.AudioChannels)" -ForegroundColor DarkCyan
+        # Video Codec extrahieren (robuster, erkennt auch Klammern und weitere Zeichen)
+        if ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Video:\s*([^\s,]+)") {
+            $mediaInfo.VideoCodec = $matches[1]
         }
-        elseif ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Audio:.+?stereo") {
-            $mediaInfo.AudioChannels = 2
-            Write-Host "Audioformat ist stereo (2 Kanäle)" -ForegroundColor DarkCyan
+        elseif ($infoOutput -match "Video:\s*([^\s,]+)") {
+            $mediaInfo.VideoCodec = $matches[1]
         }
-        elseif ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Audio:.+?mono") {
-            $mediaInfo.AudioChannels = 1
-            Write-Host "Audioformat ist mono (1 Kanal)" -ForegroundColor DarkCyan
+        elseif ($infoOutput -match "Video:\s*([^\s,]+)\s*\(") {
+            $mediaInfo.VideoCodec = $matches[1]
         }
         else {
-            Write-Host "WARNUNG: Konnte Audiokanäle nicht aus der FFmpeg-Ausgabe extrahieren" -ForegroundColor Yellow
+            $mediaInfo.VideoCodec = "Unbekannt"
+        }
+        # Auflösung extrahieren (robuster, erkennt auch Zeilen wie "720x576 [SAR ...]")
+        if ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Video:.*?,\s+(\d+)x(\d+)") {
+            $mediaInfo.Resolution = "$($matches[1])x$($matches[2])"
+        }
+        elseif ($infoOutput -match "Video:.*?,\s*[^\s,]+,\s*(\d+)x(\d+)") {
+            $mediaInfo.Resolution = "$($matches[1])x$($matches[2])"
+        }
+        elseif ($infoOutput -match "Video:.*?(\d+)x(\d+)\s*\[SAR") {
+            $mediaInfo.Resolution = "$($matches[1])x$($matches[2])"
+        }
+        else {
+            $mediaInfo.Resolution = "Unbekannt"
+        }
+        # Audiokanäle extrahieren
+        # Versuche, die Anzahl der Audiokanäle aus verschiedenen FFmpeg-Ausgabeformaten zu extrahieren
+        if ($infoOutput -match "Audio:.*?,\s*\d+\s*Hz,\s*([0-9\.]+)\s*channels?") {
+            $mediaInfo.AudioChannels = [int]$matches[1]
+        }
+        elseif ($infoOutput -match "Audio:.*?,\s*\d+\s*Hz,\s*([a-zA-Z0-9\.\(\)\[\]\-]+),") {
+            # Erkenne Kanalbezeichnungen wie '5.1', '7.1', 'mono', 'stereo', '5.1(side)' etc.
+            $channelDesc = $matches[1]
+            switch -Regex ($channelDesc) {
+            "mono"   { $mediaInfo.AudioChannels = 1; break }
+            "stereo" { $mediaInfo.AudioChannels = 2; break }
+            "2\.1"   { $mediaInfo.AudioChannels = 3; break }
+            "3\.0"   { $mediaInfo.AudioChannels = 3; break }
+            "4\.0"   { $mediaInfo.AudioChannels = 4; break }
+            "5\.0"   { $mediaInfo.AudioChannels = 5; break }
+            "5\.1"   { $mediaInfo.AudioChannels = 6; break }
+            "6\.1"   { $mediaInfo.AudioChannels = 7; break }
+            "7\.1"   { $mediaInfo.AudioChannels = 8; break }
+            default  {
+                # Versuche, eine Zahl am Anfang zu extrahieren (z.B. '6 channels')
+                if ($channelDesc -match "^(\d+)") {
+                $mediaInfo.AudioChannels = [int]$matches[1]
+                } else {
+                $mediaInfo.AudioChannels = 0
+                }
+            }
+            }
+        }
+        elseif ($infoOutput -match "Audio:.+?stereo") {
+            $mediaInfo.AudioChannels = 2
+        }
+        elseif ($infoOutput -match "Audio:.+?mono") {
+            $mediaInfo.AudioChannels = 1
+        }
+        else {
             $mediaInfo.AudioChannels = 0
         }
+
+        # Audio Codec extrahieren (robusteres Pattern, um auch Klammern und Bindestriche zu erfassen)
+        if ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Audio:\s*([\w\-\d]+)") {
+            $mediaInfo.AudioCodec = $matches[1]
+        }
+        elseif ($infoOutput -match "Audio:\s*([\w\-\d]+)") {
+            $mediaInfo.AudioCodec = $matches[1]
+        }
+        else {
+            $mediaInfo.AudioCodec = "Unbekannt"
+        }
+        Write-Host "Video: $($mediaInfo.DurationFormatted) | $($mediaInfo.VideoCodec) | $($mediaInfo.Resolution)" -ForegroundColor DarkCyan
+        Write-Host "Audio: $($mediaInfo.AudioChannels) Kanäle: | $($mediaInfo.AudioCodec)" -ForegroundColor DarkCyan
     }
     catch {
         Write-Host "Fehler beim Abrufen der Mediendaten: $_" -ForegroundColor Red
@@ -225,7 +365,8 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
         [double]$gain, # Der anzuwendende Gain-Wert in dB
         [string]$outputFile, # Pfad für die Ausgabedatei
         [int]$audioChannels, # Anzahl der Audiokanäle in der Eingabedatei
-        [string]$videoCodec # Video Codec der Eingabedatei
+        [string]$videoCodec, # Video Codec der Eingabedatei
+        [bool]$interlaced = $false # Gibt an, ob das Video interlaced ist
 
     )
     try {
@@ -238,7 +379,6 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
             "-y", # Überschreibe Ausgabedateien ohne Nachfrage
             "-i", "`"$($filePath)`"" # Eingabedatei
         )
-
         # konvertieren, wenn der Video Codec nicht HEVC ist
         if ($videoCodec -ne $videoCodecHEVC -AND -not $force720p -match "true") {
             Write-Host "Video Transode..." -NoNewline -ForegroundColor Cyan
@@ -246,15 +386,28 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
                 "-c:v", "libx265", # Video-Codec auf HEVC setzen
                 "-preset", $encoderPreset, # Encoder-Voreinstellung verwenden
                 "-crf", $crfTarget  # CRF-Wert für die Qualität
+                if ($interlaced -eq $true) {
+                    Write-Host "Deinterlacing..." -NoNewline -ForegroundColor Cyan
+                    "-vf", "yadif=0:-1:0" # Deinterlacing-Filter anwenden
+                }
             )
         }
+        # Überprüfen, ob die Auflösung 720p ist und die Variable $force720p gesetzt ist
         if ($force720p -match "true") {
             Write-Host "Video transcoe mit resize..." -NoNewline -ForegroundColor Cyan
             $ffmpegArguments += @(
                 "-c:v", "libx265", # Video-Codec auf HEVC setzen
                 "-preset", $encoderPreset, # Encoder-Voreinstellung verwenden
-                "-crf", $crfTarget,  # CRF-Wert für die Qualität
-                "-vf", "scale=1280:720" # Auflösung auf 720p skalieren
+                "-crf", $crfTarget  # CRF-Wert für die Qualität
+                #"-vf", "scale=1280:720" # Auflösung auf 720p skalieren
+                if ($interlaced -eq $true) {
+                    Write-Host "Deinterlacing und Scaling..." -NoNewline -ForegroundColor Cyan
+                    "-vf", "yadif=0:-1:0" # Deinterlacing-Filter anwenden
+                }
+                else {
+                    Write-Host "Scaling auf 720p..." -NoNewline -ForegroundColor Cyan
+                    "-vf", "scale=1280:720" # Auflösung auf 720p skalieren
+                }
             )
         }
         # Überprüfen, ob der Video-Codec bereits HEVC ist
@@ -263,7 +416,7 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
             # Video-Codec beibehalten, wenn er bereits HEVC ist
             $ffmpegArguments += @(
                 "-c:v", "copy" # Video Codec kopieren
-            ) 
+            )
         }
         if ($audioChannels -gt 2) {
             Write-Host "Audio transcode Surround..." -NoNewline -ForegroundColor Cyan
@@ -288,7 +441,7 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
                 "-c:a", "libfdk_aac", # Audio-Codec auf AAC setzen
                 "-profile:a", "aac_he", # AAC-Profil setzen
                 "-b:a", $audioCodecBitrate128 # Audio-Bitrate setzen
-            )        
+            )
         }
         $ffmpegArguments += @(
             Write-Host "Lautstärke anpassung und Metadaten..."  -ForegroundColor Cyan
@@ -319,7 +472,7 @@ function Test-OutputFile {# Überprüfe die Ausgabedatei, sobald der Prozess abg
     # Warte kurz, um sicherzustellen, dass die Datei vollständig geschrieben wurde
     Start-Sleep -Seconds 2
 
-    Test_Fileintregity -Outputfile $outputFile -ffmpegPath $ffmpegPath -destFolder $destFolder
+    Test_Fileintregity -Outputfile $outputFile -ffmpegPath $ffmpegPath -destFolder $destFolder -file $sourceFile
 
     $outputInfo = Get-MediaInfo2 -filePath $outputFile
     # Überprüfe, ob die Ausgabedatei korrekt erfasst wurde
@@ -327,7 +480,7 @@ function Test-OutputFile {# Überprüfe die Ausgabedatei, sobald der Prozess abg
         Write-Host "  FEHLER: Konnte Mediendaten für die Ausgabedatei nicht korrekt extrahieren." -ForegroundColor Red
         return $false
     }
-    Write-Host "  Quelldatei-Dauer: $($sourceInfo.DurationFormatted) | Audiokanäle: $($sourceInfo.AudioChannels)" -ForegroundColor Blue
+    Write-Host "  Quelldatei-Dauer: $($sourceInfo.DurationFormatted1) | Audiokanäle: $($sourceInfo.AudioChannels)" -ForegroundColor Blue
     Write-Host "  Ausgabedatei-Dauer: $($outputInfo.DurationFormatted) | Audiokanäle: $($outputInfo.AudioChannels)" -ForegroundColor Blue
     # Überprüfe die Laufzeit (mit einer kleinen Toleranz von 1 Sekunde)
     $durationDiff = [Math]::Abs($sourceInfo.Duration - $outputInfo.Duration)
@@ -353,7 +506,10 @@ function Test_Fileintregity {
         [string]$ffmpegPath,
 
         [Parameter(Mandatory = $true)]
-        [string]$destFolder
+        [string]$destFolder,
+
+        [Parameter(Mandatory = $true)]
+        [string]$file
     )
 
     $logDatei = Join-Path -Path $destFolder -ChildPath "MKV_Überprüfung.log"
@@ -374,7 +530,7 @@ function Test_Fileintregity {
 
     $argumentsi = @(
         "-v", "error",
-        "-i", "`"$filePath`"",
+        "-i", "`"$file`"",
         "-f", "null",
         "-"
     ) -join ' '
@@ -410,7 +566,7 @@ function Test_Fileintregity {
         Write-Host "FEHLER in Datei: $outputFile" -ForegroundColor Red
         Add-Content $logDatei "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $outputFile - FEHLER:"
         Add-Content $logDatei $ffmpegFehlero
-        Add-Content $logDatei "$filePath wird auf fehler in der Quelle geprüft."
+        Add-Content $logDatei "$file wird auf fehler in der Quelle geprüft."
         Add-Content $logDatei "----------------------------------------"
 
         # Prozess konfigurieren
@@ -437,13 +593,13 @@ function Test_Fileintregity {
 
         # Auswertung
         if ($exitCode -eq 0 -and [string]::IsNullOrWhiteSpace($ffmpegFehleri)) {
-            Write-Host "OK: $filePath" -ForegroundColor Green
-            Add-Content $logDatei "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $filePath - OK"
+            Write-Host "OK: $file" -ForegroundColor Green
+            Remove-Item $logDatei -Force
         } else {
-            Write-Host "FEHLER in Datei: $filePath" -ForegroundColor Red
-            Add-Content $logDatei "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $filePath - FEHLER:"
+            Write-Host "FEHLER in Datei: $file" -ForegroundColor Red
+            Add-Content $logDatei "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $file - FEHLER:"
             Add-Content $logDatei $ffmpegFehleri
-            Add-Content $logDatei "$filePath und $outputFile haben beide fehler."
+            Add-Content $logDatei "$file und $outputFile haben beide fehler."
             Add-Content $logDatei "----------------------------------------"
         }
     }
@@ -453,7 +609,6 @@ function Test_Fileintregity {
     "`n==== Überprüfung beendet am $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ====" | Add-Content $logDatei
     Write-Host "Überprüfung abgeschlossen. Ergebnis in: $logDatei"
 }
-
 function Remove-Files {# Funktion zum Aufräumen und Umbenennen von Dateien
     param (
         [string]$outputFile,
@@ -468,7 +623,8 @@ function Remove-Files {# Funktion zum Aufräumen und Umbenennen von Dateien
             # Datei umbenennen mit Zwischenschritt um Namenskollisionen zu vermeiden
             Rename-Item -Path $outputFile -NewName $tempFile -Force
             Remove-Item -Path $sourceFile -Force
-            Rename-Item -Path $tempFile -NewName ([System.IO.Path]::GetFileName($sourceFile)) -Force
+            $finalFile = [System.IO.Path]::Combine((Split-Path -Path $sourceFile), "$([System.IO.Path]::GetFileNameWithoutExtension($sourceFile))$targetExtension")
+            Rename-Item -Path $tempFile -NewName $finalFile -Force
             Write-Host "  Erfolg: Quelldatei gelöscht und normalisierte Datei umbenannt zu $([System.IO.Path]::GetFileName($sourceFile))" -ForegroundColor Green
         } else {
             Write-Host "  FEHLER: Test-OutputFile ist fehlgeschlagen. Test-OutputFile wird gelöscht." -ForegroundColor Red
@@ -502,7 +658,7 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
     Write-Host -Object "Ausgewählter Ordner: $destFolder" -ForegroundColor Green
 
     # Alle MKV-Dateien im ausgewählten Ordner rekursiv suchen
-    $mkvFiles = Get-ChildItem -Path $destFolder -Filter "*.mkv" -Recurse
+    $mkvFiles = Get-ChildItem -Path $destFolder -Include $extensions -Recurse
     $mkvFileCount = ($mkvFiles | Measure-Object).Count
 
     # Jede MKV-Datei verarbeiten
@@ -558,10 +714,9 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
                 Write-Host "Passe Lautstärke an um $gain dB" -ForegroundColor Yellow
                 # Ausgabedatei erstellen
                 $outputFile = [System.IO.Path]::Combine($file.DirectoryName, "$($file.BaseName)_normalized$($targetExtension)")
-                # Lautstärke anpassen
-                Set-VolumeGain -filePath $file.FullName -gain $gain -outputFile $outputFile -audioChannels $sourceInfo.AudioChannels -videoCodec $sourceInfo.VideoCodec
+                Set-VolumeGain -filePath $file.FullName -gain $gain -outputFile $outputFile -audioChannels $sourceInfo.AudioChannels -videoCodec $sourceInfo.VideoCodec -interlaced $sourceInfo.Interlaced
                 # Überprüfen der Ausgabedatei
-                Test-OutputFile -outputFile $outputFile -sourceFile $file.FullName -sourceInfo $sourceInfo -targetExtension $targetExtension 
+                Test-OutputFile -outputFile $outputFile -sourceFile $file.FullName -sourceInfo $sourceInfo -targetExtension $targetExtension
                 # Aufräumen und Umbenennen der Ausgabedatei
                 Remove-Files -outputFile $outputFile -sourceFile $file.FullName -targetExtension $targetExtension
             }
@@ -577,7 +732,7 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
     }
     # Nachbereitung: Lösche alle _normalized Dateien
     Write-Host "Starte Nachbereitung: Suche und lösche _normalized Dateien..." -ForegroundColor Cyan
-    $normalizedFiles = Get-ChildItem -Path $destFolder -Filter "*_normalized*$targetExtension" -Recurse
+    $normalizedFiles = Get-ChildItem -Path $destFolder -Include "*_normalized*$targetExtension" -Recurse -File
     foreach ($normalizedFile in $normalizedFiles) {
         try {
             Remove-Item -Path $normalizedFile.FullName -Force
