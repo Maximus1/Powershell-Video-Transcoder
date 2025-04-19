@@ -1,5 +1,5 @@
 # PowerShell-Skript zur kombinierten Medienanalyse, Lautstärkeanpassung und Transkodierung mit FFmpeg
-# Datum: [Aktuelles Datum]
+# Datum: [4/20/2025]
 # Version: 1.0
 # Hinweis: Dieses Skript ist für den persönlichen Gebrauch gedacht und sollte nicht ohne Erlaubnis weitergegeben werden.
 # Verwendung: Führen Sie das Skript in PowerShell aus. Es öffnet sich ein Dialog zur Ordnerauswahl.
