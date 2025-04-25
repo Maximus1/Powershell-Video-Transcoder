@@ -28,7 +28,6 @@ INFO: your FFMPEG needs to support libfdk_aac. Compile it by yourself (<https://
 
 8. **Cleanup:** The original file is replaced by the new, normalized file. Temporary files and already normalized files are deleted.
 
-
 Output to the console:
 
 ```text
