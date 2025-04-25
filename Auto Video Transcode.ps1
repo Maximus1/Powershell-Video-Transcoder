@@ -1,12 +1,41 @@
+#region Script-Information
 # PowerShell-Skript zur kombinierten Medienanalyse, Lautstärkeanpassung und Transkodierung mit FFmpeg
 # Datum: [4/20/2025]
 # Version: 1.0
-# Hinweis: Dieses Skript ist für den persönlichen Gebrauch gedacht und sollte nicht ohne Erlaubnis weitergegeben werden.
+# Hinweis: Dieses Skript ist für den persönlichen Gebrauch gedacht und sollte in diesem Sinne auch ohne Erlaubnis weitergegeben werden.
 # Verwendung: Führen Sie das Skript in PowerShell aus. Es öffnet sich ein Dialog zur Ordnerauswahl.
 # Die MKV-Dateien werden dann überprüft, die Lautstärke angepasst und bei bedarf transkodiert.
 # Die Ausgabedateien werden im gleichen Verzeichnis wie die Eingabedateien gespeichert.
 # Bei Fehlern wird eine Logdatei erstellt und die Ergebnisse in der Logdatei gespeichert.
 
+# Der Programmablaufplan für das Skript "Auto Video Transcode.ps1":
+# 1 Initialisierung:
+#   Konfiguration der globalen Variablen (z. B. $ffmpegPath, $targetLoudness, $extensions).
+#   Definition von Hilfsfunktionen (z. B. Get-MediaInfo, Set-VolumeGain, Test-OutputFile).
+# 2 Ordnerauswahl:
+#   Öffnen eines Dialogs zur Auswahl eines Ordners.
+#   Abbruch, falls kein Ordner ausgewählt wurde.
+# 3 Dateisuche:
+#   Rekursive Suche nach Mediendateien im ausgewählten Ordner basierend auf den definierten Dateierweiterungen.
+# 4 Dateiverarbeitung (pro Datei):
+#   a Mediendaten extrahieren:
+#     Auflösung, Codec, Dauer und andere Eigenschaften der Datei ermitteln.
+#   b Serienmuster prüfen:
+#     Überprüfen, ob die Datei einem Serienmuster entspricht (z. B. "S01E01").
+#     Falls ja, prüfen, ob eine Skalierung auf 720p erforderlich ist.
+#   c Lautstärkeanalyse:
+#     Lautheitsinformationen (LUFS) der Datei extrahieren.
+#   d Lautstärkeanpassung:
+#     Falls erforderlich, Lautstärke anpassen und Datei transkodieren.
+#   e Ausgabedatei prüfen:
+#     Integrität und Konsistenz der Ausgabedatei überprüfen.
+#   f Aufräumen:
+#     Originaldatei löschen und Ausgabedatei umbenennen.
+# 5 Nachbereitung:
+#     Löschen aller temporären Dateien (z. B. _normalized-Dateien).
+# 6 Abschluss:
+#     Ausgabe einer Erfolgsmeldung oder Fehlerberichte.
+#endregion
 
 #region Konfiguration
 # Pfad zu FFmpeg (muss korrekt sein)
@@ -25,8 +54,10 @@ $audioCodecBitrate128 = '128k'
 $videoCodecHEVC = 'HEVC'
 $force720p = $false
 
+
 # Standard-Dateierweiterung für die Ausgabe
 $targetExtension = '.mkv'
+
 #endregion
 
 #region Hilfsfunktionen
@@ -68,6 +99,16 @@ function Get-MediaInfo {# Funktion zum Extrahieren von Mediendaten mit FFmpeg
         if ($infoOutput -match "GAINED" ) {
             Write-Host "Überspringe bereits normalisierte Datei: $($file.Name) (Tag)" -ForegroundColor green
             continue
+        }
+        # fps extrahieren
+        if ($infoOutput -match "fps,\s*(\d+(\.\d+)?)") {
+            $mediaInfo.FPS = [double]$matches[1]
+            $script:fps = [double]$matches[1]
+            #Write-Host "Extrahierte FPS: $($mediaInfo.FPS)" -ForegroundColor DarkCyan
+        }
+        else {
+            Write-Host "WARNUNG: Konnte FPS nicht aus der FFmpeg-Ausgabe extrahieren" -ForegroundColor Yellow
+            $mediaInfo.FPS = 0
         }
         # Dauer extrahieren
         if ($infoOutput -match "Duration:\s*(\d+):(\d+):(\d+)\.(\d+)") {
@@ -384,6 +425,7 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
             Write-Host "Video Transode..." -NoNewline -ForegroundColor Cyan
             $ffmpegArguments += @(
                 "-c:v", "libx265", # Video-Codec auf HEVC setzen
+                "-avoid_negative_ts", "make_zero", # Negative Timestamps vermeiden
                 "-preset", $encoderPreset, # Encoder-Voreinstellung verwenden
                 "-crf", $crfTarget  # CRF-Wert für die Qualität
                 if ($interlaced -eq $true) {
@@ -397,14 +439,14 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
             Write-Host "Video transcoe mit resize..." -NoNewline -ForegroundColor Cyan
             $ffmpegArguments += @(
                 "-c:v", "libx265", # Video-Codec auf HEVC setzen
+                "-avoid_negative_ts", "make_zero", # Negative Timestamps vermeiden
                 "-preset", $encoderPreset, # Encoder-Voreinstellung verwenden
                 "-crf", $crfTarget  # CRF-Wert für die Qualität
                 #"-vf", "scale=1280:720" # Auflösung auf 720p skalieren
                 if ($interlaced -eq $true) {
                     Write-Host "Deinterlacing und Scaling..." -NoNewline -ForegroundColor Cyan
                     "-vf", "yadif=0:-1:0" # Deinterlacing-Filter anwenden
-                }
-                else {
+                } else {
                     Write-Host "Scaling auf 720p..." -NoNewline -ForegroundColor Cyan
                     "-vf", "scale=1280:720" # Auflösung auf 720p skalieren
                 }
@@ -513,7 +555,7 @@ function Test_Fileintregity {
     )
 
     $logDatei = Join-Path -Path $destFolder -ChildPath "MKV_Überprüfung.log"
-    "`n==== Überprüfung gestartet am $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ====" | Add-Content $logDatei
+    $date = Get-Date -Format "yyyy-MM-dd"
 
     Write-Host "Überprüfe Datei: $outputFile"
 
@@ -535,6 +577,8 @@ function Test_Fileintregity {
         "-"
     ) -join ' '
 
+
+
     # Prozess konfigurieren
     $processInfoo = New-Object System.Diagnostics.ProcessStartInfo
     $processInfoo.FileName = $ffmpegPath
@@ -553,16 +597,16 @@ function Test_Fileintregity {
     # Fehler auslesen und warten
     [string]$ffmpegFehlero = $process.StandardError.ReadToEnd()
     $process.WaitForExit()
-    $exitCode = $process.ExitCode
+    $exitCodeo = $process.ExitCode
 
     # Fehlerausgabe zwischenspeichern
     $ffmpegFehlero | Out-File -FilePath $tempFehlerDatei -Encoding UTF8
 
     # Auswertung
-    if ($exitCode -eq 0 -and [string]::IsNullOrWhiteSpace($ffmpegFehlero)) {
+    if ($exitCodeo -eq 0 -and [string]::IsNullOrWhiteSpace($ffmpegFehlero)) {
         Write-Host "OK: $outputFile" -ForegroundColor Green
-        Add-Content $logDatei "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $outputFile - OK"
     } else {
+        "`n==== Überprüfung gestartet am $($date) ====" | Add-Content $logDatei
         Write-Host "FEHLER in Datei: $outputFile" -ForegroundColor Red
         Add-Content $logDatei "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $outputFile - FEHLER:"
         Add-Content $logDatei $ffmpegFehlero
@@ -586,14 +630,15 @@ function Test_Fileintregity {
         # Fehler auslesen und warten
         [string]$ffmpegFehleri = $process.StandardError.ReadToEnd()
         $process.WaitForExit()
-        $exitCode = $process.ExitCode
+        $exitCodei = $process.ExitCode
 
         # Fehlerausgabe zwischenspeichern
         $ffmpegFehleri | Out-File -FilePath $tempFehlerDatei -Encoding UTF8
 
         # Auswertung
-        if ($exitCode -eq 0 -and [string]::IsNullOrWhiteSpace($ffmpegFehleri)) {
+        if ($exitCodei -eq 0 -and [string]::IsNullOrWhiteSpace($ffmpegFehleri)) {
             Write-Host "OK: $file" -ForegroundColor Green
+            Remove-Item $outputFile -Force
             Remove-Item $logDatei -Force
         } else {
             Write-Host "FEHLER in Datei: $file" -ForegroundColor Red
