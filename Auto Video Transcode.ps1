@@ -260,9 +260,8 @@ function Get-MediaInfo2 { #keine file vorhanden prüfung
     )
     $mediaInfo = @{}
     try {
-        # Führe FFmpeg aus, um Informationen über die Datei zu erhalten
+# Führe FFmpeg aus, um Informationen über die Datei zu erhalten
         # Führe expliziten Befehl statt Umleitung aus, um korrekte Fehlerausgabe zu erhalten
-        #$tempOutputFile = [System.IO.Path]::GetTempFileName()
         $startInfo = New-Object System.Diagnostics.ProcessStartInfo
         $startInfo.FileName = $ffmpegPath
         $startInfo.Arguments = "-i `"$filePath`""
@@ -277,7 +276,7 @@ function Get-MediaInfo2 { #keine file vorhanden prüfung
 
         $infoOutput = $process.StandardError.ReadToEnd()
         $process.WaitForExit()
-        # Extrahiere die Dauer mit einem verbesserten Regex-Pattern
+# Extrahiere die Dauer mit einem verbesserten Regex-Pattern
         if ($infoOutput -match "Duration:\s*(\d+):(\d+):(\d+)\.(\d+)") {
             $hours = [int]$matches[1]
             $minutes = [int]$matches[2]
@@ -293,7 +292,7 @@ function Get-MediaInfo2 { #keine file vorhanden prüfung
             $mediaInfo.Duration = 0
             $mediaInfo.DurationFormatted = "00:00:00.00"
         }
-        # Video Codec extrahieren (robuster, erkennt auch Klammern und weitere Zeichen)
+# Video Codec extrahieren (robuster, erkennt auch Klammern und weitere Zeichen)
         if ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Video:\s*([^\s,]+)") {
             $mediaInfo.VideoCodec = $matches[1]
         }
@@ -306,7 +305,7 @@ function Get-MediaInfo2 { #keine file vorhanden prüfung
         else {
             $mediaInfo.VideoCodec = "Unbekannt"
         }
-        # Auflösung extrahieren (robuster, erkennt auch Zeilen wie "720x576 [SAR ...]")
+# Auflösung extrahieren (robuster, erkennt auch Zeilen wie "720x576 [SAR ...]")
         if ($infoOutput -match "Stream\s+#\d+:\d+(?:\([\w-]+\))?:\s+Video:.*?,\s+(\d+)x(\d+)") {
             $mediaInfo.Resolution = "$($matches[1])x$($matches[2])"
         }
@@ -383,15 +382,15 @@ function Get-LoudnessInfo {# Funktion zur Lautstärkeanalyse mit FFmpeg
         [string]$filePath # Pfad zur Eingabedatei
     )
     try {
-        # Temporäre Datei erstellen, um die FFmpeg-Ausgabe zu speichern
+# Temporäre Datei erstellen, um die FFmpeg-Ausgabe zu speichern
         $tempOutputFile = [System.IO.Path]::GetTempFileName()
-        # FFmpeg-Prozess starten, um die Lautstärke zu analysieren
+ # FFmpeg-Prozess starten, um die Lautstärke zu analysieren
         Write-Host "Starte FFmpeg zur Lautstärkeanalyse..." -ForegroundColor Cyan
-        $ffmpegProcess = Start-Process -FilePath $ffmpegPath -ArgumentList "-i", "`"$($filePath)`"", "-hide_banner", "-filter_complex", "ebur128=metadata=1", "-f", "null", "NUL" -NoNewWindow -PassThru -RedirectStandardError $tempOutputFile
+        $ffmpegProcess = Start-Process -FilePath $ffmpegPath -ArgumentList "-i", "`"$($filePath)`"", "-hide_banner", "-filter_complex", "[0:a:0]ebur128=metadata=1", "-f", "null", "NUL" -NoNewWindow -PassThru -RedirectStandardError $tempOutputFile
         $ffmpegProcess.WaitForExit()
-        # Ausgabe aus der temporären Datei lesen
+# Ausgabe aus der temporären Datei lesen
         $ffmpegOutput = Get-Content -Path $tempOutputFile -Raw
-        # Temporäre Datei löschen
+# Temporäre Datei löschen
         Remove-Item -Path $tempOutputFile -Force -ErrorAction SilentlyContinue
         return $ffmpegOutput
     }
@@ -411,48 +410,51 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
 
     )
     try {
-        # FFmpeg-Argumente basierend auf der Anzahl der Audiokanäle erstellen
+# FFmpeg-Argumente basierend auf der Anzahl der Audiokanäle, Bildgröße und Quellcodec erstellen
         Write-Host "Starte FFmpeg zur Lautstärkeanpassung..." -NoNewline -ForegroundColor Cyan
         $ffmpegArguments = @(
             "-hide_banner", # FFmpeg-Banner ausblenden
-            "-loglevel", "error",
+            "-loglevel", "error", # Nur Fehler anzeigen
             "-stats", # Statistiken anzeigen
             "-y", # Überschreibe Ausgabedateien ohne Nachfrage
             "-i", "`"$($filePath)`"" # Eingabedatei
         )
-        # konvertieren, wenn der Video Codec nicht HEVC ist
+# konvertieren, wenn der Video Codec nicht HEVC ist
         if ($videoCodec -ne $videoCodecHEVC -AND -not $force720p -match "true") {
             Write-Host "Video Transode..." -NoNewline -ForegroundColor Cyan
             $ffmpegArguments += @(
                 "-c:v", "libx265", # Video-Codec auf HEVC setzen
                 "-avoid_negative_ts", "make_zero", # Negative Timestamps vermeiden
                 "-preset", $encoderPreset, # Encoder-Voreinstellung verwenden
-                "-crf", $crfTarget  # CRF-Wert für die Qualität
+                "-crf", $crfTarget,  # CRF-Wert für die Qualität
+                "-x265-params", "aq-mode=3:psy-rd=2.0:psy-rdoq=1.0:rd=4"
                 if ($interlaced -eq $true) {
                     Write-Host "Deinterlacing..." -NoNewline -ForegroundColor Cyan
-                    "-vf", "yadif=0:-1:0" # Deinterlacing-Filter anwenden
+                    "-vf", "yadif=0:-1:0,hqdn3d=1.5:1.5:6:6" # Deinterlacing-Filter anwenden
+                }else{
+                    "-vf", "hqdn3d=1.5:1.5:6:6"
                 }
             )
         }
-        # Überprüfen, ob die Auflösung 720p ist und die Variable $force720p gesetzt ist
+# Überprüfen, ob die Auflösung 720p ist und die Variable $force720p gesetzt ist
         if ($force720p -match "true") {
             Write-Host "Video transcoe mit resize..." -NoNewline -ForegroundColor Cyan
             $ffmpegArguments += @(
                 "-c:v", "libx265", # Video-Codec auf HEVC setzen
                 "-avoid_negative_ts", "make_zero", # Negative Timestamps vermeiden
                 "-preset", $encoderPreset, # Encoder-Voreinstellung verwenden
-                "-crf", $crfTarget  # CRF-Wert für die Qualität
-                #"-vf", "scale=1280:720" # Auflösung auf 720p skalieren
+                "-crf", $crfTarget,  # CRF-Wert für die Qualität
+                "-x265-params", "aq-mode=3:psy-rd=2.0:psy-rdoq=1.0:rd=4"
                 if ($interlaced -eq $true) {
                     Write-Host "Deinterlacing und Scaling..." -NoNewline -ForegroundColor Cyan
-                    "-vf", "yadif=0:-1:0" # Deinterlacing-Filter anwenden
+                    "-vf", "yadif=0:-1:0,scale=1280:720,hqdn3d=1.5:1.5:6:6" # Deinterlacing-Filter anwenden
                 } else {
                     Write-Host "Scaling auf 720p..." -NoNewline -ForegroundColor Cyan
-                    "-vf", "scale=1280:720" # Auflösung auf 720p skalieren
+                    "-vf", "scale=1280:720,hqdn3d=1.5:1.5:6:6" # Auflösung auf 720p skalieren
                 }
             )
         }
-        # Überprüfen, ob der Video-Codec bereits HEVC ist
+# Überprüfen, ob der Video-Codec bereits HEVC ist
         if ($videoCodec -eq $videoCodecHEVC -AND -not $force720p) {
             Write-Host "Video copy..." -NoNewline -ForegroundColor Cyan
             # Video-Codec beibehalten, wenn er bereits HEVC ist
@@ -460,6 +462,7 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
                 "-c:v", "copy" # Video Codec kopieren
             )
         }
+# Überprüfen, ob die Anzahl der Audiokanäle größer als 2 ist
         if ($audioChannels -gt 2) {
             Write-Host "Audio transcode Surround..." -NoNewline -ForegroundColor Cyan
             $ffmpegArguments += @(
@@ -469,6 +472,7 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
                 "-channel_layout", "5.1" # Kanal-Layout setzen
             )
         }
+# Überprüfen, ob die Anzahl der Audiokanäle gleich 2 ist
         if ($audioChannels -eq 2) {
             Write-Host "Audio transcode Stereo..." -NoNewline -ForegroundColor Cyan
             $ffmpegArguments += @(
@@ -477,6 +481,7 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
                 "-b:a", $audioCodecBitrate192 # Audio-Bitrate setzen
             )
         }
+# Überprüfen, ob die Anzahl der Audiokanäle kleiner oder gleich 1 ist
         if ($audioChannels -le 1) {
             Write-Host "Audio transcode Mono..." -NoNewline -ForegroundColor Cyan
             $ffmpegArguments += @(
@@ -485,6 +490,7 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
                 "-b:a", $audioCodecBitrate128 # Audio-Bitrate setzen
             )
         }
+# Metadaten setzen, untertitel kopieren und Lautstärke anpassen
         $ffmpegArguments += @(
             Write-Host "Lautstärke anpassung und Metadaten..."  -ForegroundColor Cyan
             "-af", "volume=${gain}dB", # Lautstärke anpassen
@@ -495,9 +501,10 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
             "`"$($outputFile)`"" # Ausgabedatei
         )
         Write-Host "FFmpeg-Argumente: $($ffmpegArguments -join ' ')" -ForegroundColor DarkCyan
-        # FFmpeg-Prozess starten
+# FFmpeg-Prozess zur Lautstärkeanpassung starten
         Start-Process -FilePath $ffmpegPath -ArgumentList $ffmpegArguments -NoNewWindow -Wait -PassThru -ErrorAction Stop
         Write-Host "Lautstärkeanpassung abgeschlossen für: $($filePath)" -ForegroundColor Green
+
     }
     catch {
         Write-Host "FEHLER: Fehler bei der Lautstärkeanpassung: $_" -ForegroundColor Red
@@ -511,27 +518,29 @@ function Test-OutputFile {# Überprüfe die Ausgabedatei, sobald der Prozess abg
         [string]$targetExtension
         )
     Write-Host "Überprüfe die Ausgabedatei: $outputFile" -ForegroundColor Cyan
-    # Warte kurz, um sicherzustellen, dass die Datei vollständig geschrieben wurde
+# Warte kurz, um sicherzustellen, dass die Datei vollständig geschrieben wurde
     Start-Sleep -Seconds 2
 
     Test_Fileintregity -Outputfile $outputFile -ffmpegPath $ffmpegPath -destFolder $destFolder -file $sourceFile
 
     $outputInfo = Get-MediaInfo2 -filePath $outputFile
-    # Überprüfe, ob die Ausgabedatei korrekt erfasst wurde
+# Überprüfe, ob die Ausgabedatei korrekt erfasst wurde
     if ($outputInfo.Duration -eq 0 -or $outputInfo.AudioChannels -eq 0) {
         Write-Host "  FEHLER: Konnte Mediendaten für die Ausgabedatei nicht korrekt extrahieren." -ForegroundColor Red
         return $false
+    }else {
+        Write-Host "  Die Ausgabedatei wurde erfolgreich erfasst." -ForegroundColor Green
+        Write-Host "  Quelldatei-Dauer: $($sourceInfo.DurationFormatted1) | Audiokanäle: $($sourceInfo.AudioChannels)" -ForegroundColor Blue
+        Write-Host "  Ausgabedatei-Dauer: $($outputInfo.DurationFormatted) | Audiokanäle: $($outputInfo.AudioChannels)" -ForegroundColor Blue
     }
-    Write-Host "  Quelldatei-Dauer: $($sourceInfo.DurationFormatted1) | Audiokanäle: $($sourceInfo.AudioChannels)" -ForegroundColor Blue
-    Write-Host "  Ausgabedatei-Dauer: $($outputInfo.DurationFormatted) | Audiokanäle: $($outputInfo.AudioChannels)" -ForegroundColor Blue
-    # Überprüfe die Laufzeit (mit einer kleinen Toleranz von 1 Sekunde)
+# Überprüfe die Laufzeit beider Dateien (mit einer kleinen Toleranz von 1 Sekunde)
     $durationDiff = [Math]::Abs($sourceInfo.Duration - $outputInfo.Duration)
     if ($durationDiff -gt 1) {
         Write-Host "  WARNUNG: Die Laufzeiten unterscheiden sich um $durationDiff Sekunden!" -ForegroundColor Red
         return $false
     }
     Write-Host "  OK: Die Laufzeiten stimmen überein." -ForegroundColor Green
-    # Überprüfe die Anzahl der Audiokanäle
+# Überprüfe die Anzahl der Audiokanäle beider Dateien
     if ($sourceInfo.AudioChannels -ne $outputInfo.AudioChannels) {
         Write-Host "  WARNUNG: Die Anzahl der Audiokanäle hat sich geändert! (Quelle: $($sourceInfo.AudioChannels), Ausgabe: $($outputInfo.AudioChannels))" -ForegroundColor Red
         return $false
@@ -539,7 +548,7 @@ function Test-OutputFile {# Überprüfe die Ausgabedatei, sobald der Prozess abg
     Write-Host "  OK: Die Anzahl der Audiokanäle ist gleich geblieben." -ForegroundColor Green
     return $true
 }
-function Test_Fileintregity {
+function Test_Fileintregity {# Überprüfe die Integrität der Datei (Streamfehler)
     param (
         [Parameter(Mandatory = $true)]
         [string]$outputFile,
@@ -559,10 +568,10 @@ function Test_Fileintregity {
 
     Write-Host "Überprüfe Datei: $outputFile"
 
-    # Temporäre Datei für FFmpeg-Fehlerausgabe
+# Temporäre Datei für FFmpeg-Fehlerausgabe
     $tempFehlerDatei = [System.IO.Path]::GetTempFileName()
 
-    # FFmpeg-Argumente vorbereiten
+# FFmpeg-Argumente vorbereiten
     $argumentso = @(
         "-v", "error",
         "-i", "`"$outputFile`"",
@@ -577,9 +586,7 @@ function Test_Fileintregity {
         "-"
     ) -join ' '
 
-
-
-    # Prozess konfigurieren
+# Ffmpeg Prozess konfigurieren für prüfung $outputFile
     $processInfoo = New-Object System.Diagnostics.ProcessStartInfo
     $processInfoo.FileName = $ffmpegPath
     $processInfoo.Arguments = $argumentso
@@ -589,20 +596,20 @@ function Test_Fileintregity {
     $processInfoo.UseShellExecute = $false
     $processInfoo.CreateNoWindow = $true
 
-    # FFmpeg starten
+# FFmpeg starten für prüfung $outputFile
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $processInfoo
     $process.Start() | Out-Null
 
-    # Fehler auslesen und warten
+# Fehler auslesen und warten
     [string]$ffmpegFehlero = $process.StandardError.ReadToEnd()
     $process.WaitForExit()
     $exitCodeo = $process.ExitCode
 
-    # Fehlerausgabe zwischenspeichern
+# Fehlerausgabe zwischenspeichern
     $ffmpegFehlero | Out-File -FilePath $tempFehlerDatei -Encoding UTF8
 
-    # Auswertung
+# Auswertung des Exitcodes für das Ausgabe-File
     if ($exitCodeo -eq 0 -and [string]::IsNullOrWhiteSpace($ffmpegFehlero)) {
         Write-Host "OK: $outputFile" -ForegroundColor Green
     } else {
@@ -613,7 +620,7 @@ function Test_Fileintregity {
         Add-Content $logDatei "$file wird auf fehler in der Quelle geprüft."
         Add-Content $logDatei "----------------------------------------"
 
-        # Prozess konfigurieren
+# Ffmpeg Prozess konfigurieren für prüfung $inputFile
         $processInfoi = New-Object System.Diagnostics.ProcessStartInfo
         $processInfoi.FileName = $ffmpegPath
         $processInfoi.Arguments = $argumentsi
@@ -622,25 +629,26 @@ function Test_Fileintregity {
         $processInfoi.UseShellExecute = $false
         $processInfoi.CreateNoWindow = $true
 
-        # FFmpeg starten
+# FFmpeg starten für prüfung $inputFile
         $process = New-Object System.Diagnostics.Process
         $process.StartInfo = $processInfoi
         $process.Start() | Out-Null
 
-        # Fehler auslesen und warten
+# Fehler auslesen und warten
         [string]$ffmpegFehleri = $process.StandardError.ReadToEnd()
         $process.WaitForExit()
         $exitCodei = $process.ExitCode
 
-        # Fehlerausgabe zwischenspeichern
+# Fehlerausgabe zwischenspeichern
         $ffmpegFehleri | Out-File -FilePath $tempFehlerDatei -Encoding UTF8
 
-        # Auswertung
+# Auswertung des Exitcodes für das inputFile
         if ($exitCodei -eq 0 -and [string]::IsNullOrWhiteSpace($ffmpegFehleri)) {
             Write-Host "OK: $file" -ForegroundColor Green
             Remove-Item $outputFile -Force
             Remove-Item $logDatei -Force
         } else {
+# Wenn beide Dateien Fehler haben, gebe eine Warnung aus
             Write-Host "FEHLER in Datei: $file" -ForegroundColor Red
             Add-Content $logDatei "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $file - FEHLER:"
             Add-Content $logDatei $ffmpegFehleri
@@ -648,7 +656,7 @@ function Test_Fileintregity {
             Add-Content $logDatei "----------------------------------------"
         }
     }
-
+# Lösche die temporäre Fehlerdatei
     Remove-Item $tempFehlerDatei -Force
 
     "`n==== Überprüfung beendet am $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ====" | Add-Content $logDatei
@@ -661,17 +669,18 @@ function Remove-Files {# Funktion zum Aufräumen und Umbenennen von Dateien
         [string]$targetExtension
     )
     try {
-        # Temporäre Datei für Umbenennung
-        # Datei umbenennen, wenn Test-OutputFile $true zurückgibt
+# Temporäre Datei für Umbenennung
+# Wenn Test-OutputFile $true zurückgibt, lösche die Quelldatei
         if ($true) {
             $tempFile = [System.IO.Path]::Combine((Split-Path -Path $sourceFile), "$([System.IO.Path]::GetFileNameWithoutExtension($sourceFile))_temp$([System.IO.Path]::GetExtension($sourceFile))")
-            # Datei umbenennen mit Zwischenschritt um Namenskollisionen zu vermeiden
+# Datei umbenennen mit Zwischenschritt um Namenskollisionen zu vermeiden
             Rename-Item -Path $outputFile -NewName $tempFile -Force
             Remove-Item -Path $sourceFile -Force
             $finalFile = [System.IO.Path]::Combine((Split-Path -Path $sourceFile), "$([System.IO.Path]::GetFileNameWithoutExtension($sourceFile))$targetExtension")
             Rename-Item -Path $tempFile -NewName $finalFile -Force
             Write-Host "  Erfolg: Quelldatei gelöscht und normalisierte Datei umbenannt zu $([System.IO.Path]::GetFileName($sourceFile))" -ForegroundColor Green
         } else {
+# Wenn Test-OutputFile $false zurückgibt, lösche die Ausgabedatei
             Write-Host "  FEHLER: Test-OutputFile ist fehlgeschlagen. Test-OutputFile wird gelöscht." -ForegroundColor Red
             Remove-Item -Path $outputFile -Force
         }
@@ -702,27 +711,27 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
     $destFolder = Split-Path -Path $PickFolder.FileName
     Write-Host -Object "Ausgewählter Ordner: $destFolder" -ForegroundColor Green
 
-    # Alle MKV-Dateien im ausgewählten Ordner rekursiv suchen
+# Alle MKV-Dateien im ausgewählten Ordner rekursiv suchen
     $mkvFiles = Get-ChildItem -Path $destFolder -Include $extensions -Recurse
     $mkvFileCount = ($mkvFiles | Measure-Object).Count
 
-    # Jede MKV-Datei verarbeiten
+# Jede MKV-Datei verarbeiten
     foreach ($file in $mkvFiles) {
         Write-Host "$mkvFileCount MKV-Dateien verbleibend." -ForegroundColor Green
         $mkvFileCount --
         Write-Host "Verarbeite Datei: $($file.FullName)" -ForegroundColor Cyan
 
-        # Mediendaten extrahieren
+# Mediendaten extrahieren
         $sourceInfo = Get-MediaInfo -filePath $file.FullName
         if (!$sourceInfo) {
             Write-Host "FEHLER: Konnte Mediendaten nicht extrahieren. Überspringe Datei." -ForegroundColor Red
             continue
         }
 
-        # Überprüfen, ob der Dateiname dem Serienmuster entspricht (z. B. S01E01)
+# Überprüfen, ob der Dateiname dem Serienmuster entspricht (z. B. S01E01)
         if ($file.FullName -match "S\d+E\d+") {
             Write-Host "Datei erkannt als Serientitel. Prüfe auf 720p anpassung." -ForegroundColor Yellow
-            # Setze Variable, um die 720p-Auflösung zu erzwingen
+# Setze Variable, um die 720p-Auflösung zu erzwingen
             if ($sourceInfo.Resolution -match "^(\d+)x(\d+)$") {
                 $width = [int]$matches[1]
                 $height = [int]$matches[2]
@@ -738,31 +747,31 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
                 $force720p = $false
             }
         } else {
-            # Setze Variable, um die Standardauflösung beizubehalten
+# Setze Variable, um die Standardauflösung beizubehalten
             $force720p = $false
         }
 
-        # Lautstärkeinformationen extrahieren
+# Lautstärkeinformationen extrahieren
         $ffmpegOutput = Get-LoudnessInfo -filePath $file.FullName
         if (!$ffmpegOutput) {
             Write-Host "FEHLER: Konnte Lautstärkeinformationen nicht extrahieren. Überspringe Datei." -ForegroundColor Red
             continue
         }
 
-        # Integrierte Lautheit (LUFS) extrahieren
+# Integrierte Lautheit (LUFS) extrahieren
         if ($ffmpegOutput -match "I:\s*([-\d\.]+)\s*LUFS") {
             $integratedLoudness = [double]$matches[1]
             $gain = $targetLoudness - $integratedLoudness # Notwendigen Gain berechnen
 
-            # Wenn der Gain größer als 0.1 dB ist, Lautstärke anpassen
+# Wenn der Gain größer als 0.1 dB ist, Lautstärke anpassen
             if ([math]::Abs($gain) -gt 0.2) {
                 Write-Host "Passe Lautstärke an um $gain dB" -ForegroundColor Yellow
-                # Ausgabedatei erstellen
+# Ausgabedatei erstellen
                 $outputFile = [System.IO.Path]::Combine($file.DirectoryName, "$($file.BaseName)_normalized$($targetExtension)")
                 Set-VolumeGain -filePath $file.FullName -gain $gain -outputFile $outputFile -audioChannels $sourceInfo.AudioChannels -videoCodec $sourceInfo.VideoCodec -interlaced $sourceInfo.Interlaced
-                # Überprüfen der Ausgabedatei
+# Überprüfen der Ausgabedatei
                 Test-OutputFile -outputFile $outputFile -sourceFile $file.FullName -sourceInfo $sourceInfo -targetExtension $targetExtension
-                # Aufräumen und Umbenennen der Ausgabedatei
+# Aufräumen und Umbenennen der Ausgabedatei
                 Remove-Files -outputFile $outputFile -sourceFile $file.FullName -targetExtension $targetExtension
             }
             else {
@@ -775,7 +784,7 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
         Write-Host "Verarbeitung abgeschlossen für: $($file.FullName)" -ForegroundColor Green
         Write-Host "--------------------------------------------------" -ForegroundColor DarkGray
     }
-    # Nachbereitung: Lösche alle _normalized Dateien
+# Nachbereitung: Lösche alle _normalized Dateien
     Write-Host "Starte Nachbereitung: Suche und lösche _normalized Dateien..." -ForegroundColor Cyan
     $normalizedFiles = Get-ChildItem -Path $destFolder -Include "*_normalized*$targetExtension" -Recurse -File
     foreach ($normalizedFile in $normalizedFiles) {
