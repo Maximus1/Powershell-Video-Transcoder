@@ -78,7 +78,7 @@ function Get-MediaInfo {# Funktion zum Extrahieren von Mediendaten mit FFmpeg
     )
     $mediaInfo = @{} # Hashtable zum Speichern der Mediendaten
     try {
-        # Prüfen, ob die Datei existiertamaz
+        # Prüfen, ob die Datei existiert
         if (!(Test-Path $filePath)) {
             Write-Host "FEHLER: Datei nicht gefunden: $filePath" -ForegroundColor Red
             return $null
@@ -194,7 +194,7 @@ function Get-MediaInfo {# Funktion zum Extrahieren von Mediendaten mit FFmpeg
                 } else {
                     $mediaInfo.Interlaced = $false
                     $interlaced = $false
-                }967Z&$%UWbk5
+                }
 
             } else {
                 $mediaInfo.Interlaced = $false
