@@ -9,7 +9,8 @@ $filePath = ''
 $extensions = @('.mkv', '.mp4', '.avi', '.m2ts')
 
 # Encoder-Voreinstellungen (können angepasst werden)
-$crfTarget = 22
+$crfTargetm = 22
+$crfTargets = 20
 $encoderPreset = 'medium'
 $audioCodecBitrate192 = '192k'
 $audioCodecBitrate128 = '128k'
@@ -19,12 +20,15 @@ $force720p = $false
 
 # Standard-Dateierweiterung für die Ausgabe
 $targetExtension = '.mkv'
+$script:series = $false
+$script:filesnotnorm = @()
+$script:filesnorm = @()
 
 #endregion
 
 #region Hilfsfunktionen
-# Funktion zur Überprüfung ob die Datei bereits normalisiert ist
-function Test-IsNormalized {
+
+function Test-IsNormalized { # Funktion zur Überprüfung ob die Datei bereits normalisiert ist
     param (
         [string]$file
     )
@@ -60,17 +64,21 @@ function Test-IsNormalized {
     # Prüfen ob NORMALIZED-Tag vorhanden ist
     $normalized = $xml.SelectNodes('//Simple[Name="NORMALIZED"]/String') |
                   Where-Object { $_.InnerText -eq 'true' }
-
+                  if ($null -eq $normalized) {
+                    Write-Host "Die Datei ist nicht normalisiert." -ForegroundColor Green
+                    $script:filesnotnorm += $file
+                  }else {
+                    $script:filesnorm += $file
+                  }
     return ($normalized.Count -gt 0)
 }
-# Funktion zum Überprüfen der Medieninformationen
 function Get-MediaInfo {# Funktion zum Extrahieren von Mediendaten mit FFmpeg
     param (
         [string]$filePath # Pfad zur Eingabedatei
     )
     $mediaInfo = @{} # Hashtable zum Speichern der Mediendaten
     try {
-        # Prüfen, ob die Datei existiert
+        # Prüfen, ob die Datei existiertamaz
         if (!(Test-Path $filePath)) {
             Write-Host "FEHLER: Datei nicht gefunden: $filePath" -ForegroundColor Red
             return $null
@@ -186,7 +194,8 @@ function Get-MediaInfo {# Funktion zum Extrahieren von Mediendaten mit FFmpeg
                 } else {
                     $mediaInfo.Interlaced = $false
                     $interlaced = $false
-                }
+                }967Z&$%UWbk5
+
             } else {
                 $mediaInfo.Interlaced = $false
                 $interlaced = $false
@@ -446,6 +455,11 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
                 "-preset", $encoderPreset, # Encoder-Voreinstellung verwenden
                 "-crf", $crfTarget,  # CRF-Wert für die Qualität
                 "-x265-params", "aq-mode=3:psy-rd=2.0:psy-rdoq=1.0:rd=4"
+                if ($script:series -eq $true) {
+                    "-crf", $crfTargets  # CRF-Wert für die Qualität
+                }else{
+                    "-crf", $crfTargetm # CRF-Wert für die Qualität
+                }
                 if ($interlaced -eq $true) {
                     Write-Host "Deinterlacing und Scaling..." -NoNewline -ForegroundColor Cyan
                     "-vf", "yadif=0:-1:0,scale=1280:720,hqdn3d=1.5:1.5:6:6" # Deinterlacing-Filter anwenden
@@ -518,7 +532,7 @@ function Test-OutputFile {# Überprüfe die Ausgabedatei, sobald der Prozess abg
         [object]$sourceInfo,
         [string]$targetExtension
         )
-    Write-Host "Überprüfe Ausgabedatei und Quelldatei" -ForegroundColor Cyan
+    Write-Host "Überprüfe Ausgabedatei und ggf. Quelldatei" -ForegroundColor Cyan
 # Warte kurz, um sicherzustellen, dass die Datei vollständig geschrieben wurde
     Start-Sleep -Seconds 2
 
@@ -602,7 +616,6 @@ function Test_Fileintregity {# Überprüfe die Integrität der Datei (Streamfehl
     $processInfoo = New-Object System.Diagnostics.ProcessStartInfo
     $processInfoo.FileName = $ffmpegPath
     $processInfoo.Arguments = $argumentso
-    $processInfoo.Arguments = $argumentsi
     $processInfoo.RedirectStandardError = $true
     $processInfoo.RedirectStandardOutput = $true
     $processInfoo.UseShellExecute = $false
@@ -622,7 +635,8 @@ function Test_Fileintregity {# Überprüfe die Integrität der Datei (Streamfehl
     $ffmpegFehlero | Out-File -FilePath $tempFehlerDatei -Encoding UTF8
 
 # Auswertung des Exitcodes für das Ausgabe-File
-    if ($exitCodeo -eq 0 -and [string]::IsNullOrWhiteSpace($ffmpegFehlero)) {
+    if (($exitCodeo -eq 0 -and [string]::IsNullOrWhiteSpace($ffmpegFehlero)) -or 
+        ($ffmpegFehlero -match "Application provided invalid, non monotonically increasing dts to muxer in stream 0")) {
         Write-Host "OK: $outputFile" -ForegroundColor Green
     } else {
         "`n==== Überprüfung gestartet am $($date) ====" | Add-Content $logDatei
@@ -656,7 +670,8 @@ function Test_Fileintregity {# Überprüfe die Integrität der Datei (Streamfehl
         $ffmpegFehleri | Out-File -FilePath $tempFehlerDatei -Encoding UTF8
 
 # Auswertung des Exitcodes für das inputFile
-        if ($exitCodei -eq 0 -and [string]::IsNullOrWhiteSpace($ffmpegFehleri)) {
+        if (($exitCodei -eq 0 -and [string]::IsNullOrWhiteSpace($ffmpegFehleri)) -or 
+        ($ffmpegFehleri -match "Application provided invalid, non monotonically increasing dts to muxer in stream 0")) {
             Write-Host "OK: $file" -ForegroundColor Green
             Remove-Item $outputFile -Force
             Remove-Item $logDatei -Force
@@ -745,8 +760,13 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
 # Prüfen, ob bereits NORMALIZED
         if (Test-IsNormalized $file) {
         Write-Host "Datei ist bereits normalisiert. Überspringe: $($file)" -ForegroundColor DarkGray
-        continue
         }
+    }
+    $mkvFileCount = ($filesnotnorm | Measure-Object).Count
+    foreach ($file in $filesnotnorm) {
+        Write-Host "`nStarte Verarbeitung der *nicht normalisierten* Datei: $file" -ForegroundColor Cyan
+        Write-Host "$mkvFileCount MKV-Dateien verbleibend." -ForegroundColor Green
+        $mkvFileCount --
 
 # Mediendaten extrahieren
         $sourceInfo = Get-MediaInfo -filePath $file
@@ -758,23 +778,26 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
 # Überprüfen, ob der Dateiname dem Serienmuster entspricht (z. B. S01E01)
         if ($file -match "S\d+E\d+") {
             Write-Host "Datei erkannt als Serientitel. Prüfe auf 720p anpassung." -ForegroundColor Yellow
+            $script:series = $true
 # Setze Variable, um die 720p-Auflösung zu erzwingen
             if ($sourceInfo.Resolution -match "^(\d+)x(\d+)$") {
                 $width = [int]$matches[1]
                 $height = [int]$matches[2]
                 if ($width -gt 1280 -or $height -gt 720) {
-                    Write-Host "Aktuelle Auflösung: $($sourceInfo.Resolution). Größe wird auf 720p angepasst." -ForegroundColor Yellow
+                    Write-Host "Ist Serie: Aktuelle Auflösung: $($sourceInfo.Resolution). Größe wird auf 720p angepasst." -ForegroundColor Yellow
                     $force720p = $true
                 } else {
-                    Write-Host "Aktuelle Auflösung: $($sourceInfo.Resolution). Keine Größenanpassung notwendig." -ForegroundColor Yellow
+                    Write-Host "Ist Serie: Aktuelle Auflösung: $($sourceInfo.Resolution). Keine Größenanpassung notwendig." -ForegroundColor Yellow
                     $force720p = $false
                 }
             } else {
-                Write-Host "Aktuelle Auflösung: $($sourceInfo.Resolution). Keine Größenanpassung" -ForegroundColor Yellow
+                Write-Host "Ist Serie: Aktuelle Auflösung: $($sourceInfo.Resolution). Keine Größenanpassung" -ForegroundColor Yellow
                 $force720p = $false
             }
         } else {
 # Setze Variable, um die Standardauflösung beizubehalten
+            Write-Host "Datei erkannt als Film. Keine 720p Anpassung notwendig." -ForegroundColor Yellow
+            $script:series = $false
             $force720p = $false
         }
 
