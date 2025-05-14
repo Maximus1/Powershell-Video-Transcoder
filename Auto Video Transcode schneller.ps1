@@ -190,20 +190,15 @@ function Get-MediaInfo {# Funktion zum Extrahieren von Mediendaten mit FFmpeg
                 $mediaInfo.IDET_Undetermined = $undet
                 if (($tff + $bff) -gt $prog) {
                     $mediaInfo.Interlaced = $true
-                    $interlaced = $true
                 } else {
                     $mediaInfo.Interlaced = $false
-                    $interlaced = $false
-                }
-
+               }
             } else {
                 $mediaInfo.Interlaced = $false
-                $interlaced = $false
             }
         }
         catch {
             $mediaInfo.Interlaced = $false
-            $interlaced = $false
         }
         # Audiokanäle extrahieren
         # Versuche, die Anzahl der Audiokanäle aus verschiedenen FFmpeg-Ausgabeformaten zu extrahieren
@@ -413,7 +408,8 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
         [string]$outputFile, # Pfad für die Ausgabedatei
         [int]$audioChannels, # Anzahl der Audiokanäle in der Eingabedatei
         [string]$videoCodec, # Video Codec der Eingabedatei
-        [bool]$interlaced = $false # Gibt an, ob das Video interlaced ist
+        [bool]$interlaced # Gibt an, ob das Video interlaced ist
+
 
     )
     try {
@@ -670,11 +666,18 @@ function Test_Fileintregity {# Überprüfe die Integrität der Datei (Streamfehl
         $ffmpegFehleri | Out-File -FilePath $tempFehlerDatei -Encoding UTF8
 
 # Auswertung des Exitcodes für das inputFile
-        if (($exitCodei -eq 0 -and [string]::IsNullOrWhiteSpace($ffmpegFehleri)) -or 
+        if (($exitCodei -eq 0 -and [string]::IsNullOrWhiteSpace($ffmpegFehleri)) -or
         ($ffmpegFehleri -match "Application provided invalid, non monotonically increasing dts to muxer in stream 0")) {
             Write-Host "OK: $file" -ForegroundColor Green
-            Remove-Item $outputFile -Force
-            Remove-Item $logDatei -Force
+            Try {
+                Remove-Item $outputFile -Force -ErrorAction Stop
+                Remove-Item $logDatei -Force -ErrorAction Stop
+            } catch {
+                Write-Host "FEHLER beim Löschen von Dateien: $_" -ForegroundColor Red
+                Write-Host "  Datei: $($_.Exception.ItemName)" -ForegroundColor Red 
+                Write-Host "  Fehlercode: $($_.Exception.HResult)" -ForegroundColor Red
+                Write-Host "  Fehlertyp: $($_.Exception.GetType().FullName)" -ForegroundColor Red
+            }
         } else {
 # Wenn beide Dateien Fehler haben, gebe eine Warnung aus
             Write-Host "FEHLER in Datei: $file" -ForegroundColor Red
@@ -705,15 +708,31 @@ function Remove-Files {# Funktion zum Aufräumen und Umbenennen von Dateien
         if ($true) {
             $tempFile = [System.IO.Path]::Combine((Split-Path -Path $sourceFile), "$([System.IO.Path]::GetFileNameWithoutExtension($sourceFile))_temp$([System.IO.Path]::GetExtension($sourceFile))")
 # Datei umbenennen mit Zwischenschritt um Namenskollisionen zu vermeiden
-            Rename-Item -Path $outputFile -NewName $tempFile -Force
-            Remove-Item -Path $sourceFile -Force
-            $finalFile = [System.IO.Path]::Combine((Split-Path -Path $sourceFile), "$([System.IO.Path]::GetFileNameWithoutExtension($sourceFile))$targetExtension")
-            Rename-Item -Path $tempFile -NewName $finalFile -Force
-            Write-Host "  Erfolg: Quelldatei gelöscht und normalisierte Datei umbenannt zu $([System.IO.Path]::GetFileName($sourceFile))" -ForegroundColor Green
-        } else {
+            try {
+                Rename-Item -Path $outputFile -NewName $tempFile -Force
+                Remove-Item -Path $sourceFile -Force
+                $finalFile = [System.IO.Path]::Combine((Split-Path -Path $sourceFile), "$([System.IO.Path]::GetFileNameWithoutExtension($sourceFile))$targetExtension")
+                Rename-Item -Path $tempFile -NewName $finalFile -Force
+                Write-Host "  Erfolg: Quelldatei gelöscht und normalisierte Datei umbenannt zu $([System.IO.Path]::GetFileName($sourceFile))" -ForegroundColor Green
+            }
+            catch {
+                Write-Host "FEHLER beim Löschen von Dateien: $_" -ForegroundColor Red
+                Write-Host "  Datei: $($_.Exception.ItemName)" -ForegroundColor Red 
+                Write-Host "  Fehlercode: $($_.Exception.HResult)" -ForegroundColor Red
+                Write-Host "  Fehlertyp: $($_.Exception.GetType().FullName)" -ForegroundColor Red
+            }
+} else {
 # Wenn Test-OutputFile $false zurückgibt, lösche die Ausgabedatei
             Write-Host "  FEHLER: Test-OutputFile ist fehlgeschlagen. Test-OutputFile wird gelöscht." -ForegroundColor Red
-            Remove-Item -Path $outputFile -Force
+            try {
+                Remove-Item -Path $outputFile -Force
+            }
+            catch {
+                Write-Host "FEHLER beim Löschen von Dateien: $_" -ForegroundColor Red
+                Write-Host "  Datei: $($_.Exception.ItemName)" -ForegroundColor Red
+                Write-Host "  Fehlercode: $($_.Exception.HResult)" -ForegroundColor Red
+                Write-Host "  Fehlertyp: $($_.Exception.GetType().FullName)" -ForegroundColor Red
+            }
         }
     }
     catch {
@@ -749,7 +768,6 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
     $endTime = Get-Date
     $duration = $endTime - $startTime
     Write-Host "Dateiscan-Zeit: $($duration.TotalSeconds) Sekunden" -ForegroundColor Yellow
-
 
 # Jede MKV-Datei verarbeiten
     foreach ($file in $mkvFiles) {
@@ -829,7 +847,6 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
                     Write-Host "Lautstärke bereits im Zielbereich. Keine Anpassung notwendig." -ForegroundColor Green
                     $ffmpegArgumentscopy = @()  # Array sauber neu initialisieren
                     $outputFile = [System.IO.Path]::Combine((Get-Item $file).DirectoryName, "$([System.IO.Path]::GetFileNameWithoutExtension($file))_normalized$($targetExtension)")
-
                     $ffmpegArgumentscopy += @(
                         "-hide_banner", # FFmpeg-Banner ausblenden
                         "-loglevel", "error", # Nur Fehler anzeigen
