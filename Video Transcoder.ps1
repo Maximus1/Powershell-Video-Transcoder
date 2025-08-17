@@ -24,7 +24,7 @@ try
   $zahlffmpgmax = 5
   $zahlhandb = 0
   $zahlhandbmax = 2
-  $ffmpgexe = "F:\media-autobuild_suite-master\local64\bin-video\ffmpeg.exe" #<---- Your path to FFmpeg 
+  $ffmpgexe = "F:\media-autobuild_suite-master\local64\bin-video\ffmpeg.exe" #<---- Your path to FFmpeg
   $handbrakeexe = "$env:ProgramW6432\HandBrake\HandBrakeCLI.exe" #<---- Your path to Handbrakecli
   $textoutput = "$env:USERPROFILE\Desktop\test.txt" #<---- Your path to Textfile
   $waitprocess = 10
@@ -44,7 +44,7 @@ try
     param (
         [string]$filePath
     )
-        
+
     try {
         # Für Windows: Nutze NUL statt /dev/null
         # Führe ffmpeg mit der Lautstärkeanalyse über ebur128 aus - Ausgabe in Variable erfassen
@@ -55,7 +55,7 @@ try
 
         # Lese die Ausgabe aus der temporären Datei
         $ffmpegOutput = Get-Content -Path $tempOutputFile -Raw
-           
+
         # Lösche die temporäre Datei
         Remove-Item -Path $tempOutputFile -Force -ErrorAction SilentlyContinue
         if ($ffmpegOutput -match "I:\s*([-\d\.]+)\s*LUFS") {
@@ -72,11 +72,10 @@ try
     catch {
         Write-Host "Fehler beim Ausführen von FFmpeg: $_" -ForegroundColor Red
         # Überprüfe, ob FFmpeg Fehler ausgibt
-    
+
         return $null
     }
 }
-
   #If Season in Path set encoded video to 720p else use movie Settings
   function Test-Series  {
     if ($file.DirectoryName -like $seriessessonfolder)
@@ -117,7 +116,6 @@ try
       $script:zahlhandbmax = 1
     }
   }
-
   #Check if allready converted (...neu.EXT)
   function Test-NewFileExists  {
     if([IO.File]::Exists($newfile))
@@ -138,7 +136,6 @@ try
       continue
     }
   }
-
   #Check for existing .ignore file
   function Test-IgnoreFile  {
     if([IO.File]::Exists($ignorefile))
@@ -151,12 +148,10 @@ try
       $null = New-Item -Path $ignorefilepath -Name '.ignore' -ItemType 'file' -Confirm:$false
     }
   }
-
   #Write actual $oldfile into a TXT file !!Just for your control!!
   function Write-Oldfileitem   {
     "$oldfile" | Out-File -FilePath $textoutput -Append -Confirm:$false
   }
-
   #Filesize conversion
   Function Format-FileSize()  {
     Param ([Parameter(Mandatory)][long]$size)
@@ -185,7 +180,6 @@ try
       ''
     }
   }
-
   #Suche nach MKV Dateien
   Function Test-Newfile  {
     Try
@@ -237,7 +231,7 @@ try
       Write-Host -Object 'beide da'
       Write-Host -Object "$oldfilenfo"
       Write-Host -Object "$newfilenfo"
-    
+
       #Wenn .nfo im namen vorhanden
       if ($oldfilenfo -like '*.nfo*')
       {
@@ -285,7 +279,6 @@ try
       Remove-Item -LiteralPath $ignorefile -Force -Confirm:$false -Verbose
     }
   }
-
   #Encode Audio only with FFmpg
   function Invoke-FFmpegEncode  {
     $zahlffmpg = (Get-Process -Name 'FFmpeg*').count
@@ -312,51 +305,48 @@ try
       Write-Oldfileitem
     }
   }
-
   #Encode Audio and Video wit HandbrakeCli
   function Invoke-HandbrakeEncoderFull  {
     $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
-    if ($zahlhandb -lt $zahlhandbmax -and $Auslastung -lt 75)
-    {
+    if ($zahlhandb -lt $zahlhandbmax -and $Auslastung -lt 40){
       Write-Host -Object "$zahlhandb / $zahlhandbmax"
-      if($series720p -eq [int]0)
-      {
+      if($series720p -eq [int]0){
         Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" --vfr --enable-hw-decoding `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" -R `"$handbrakehz`" --normalize-mix `"$handbrakenormalize`" -D `"$HBDRC`" -i `"$oldfile`" -o `"$newfile`""
         Write-Oldfileitem
       }
-      if($series720p -eq [int]1)
-      {
+      if($series720p -eq [int]1){
         Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" -l 720 --loose-anamorphic --keep-display-aspect --vfr --enable-hw-decoding `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" -R `"$handbrakehz`" --normalize-mix `"$handbrakenormalize`" -D `"$HBDRC`" -i `"$oldfile`" -o `"$newfile`""
         Write-Oldfileitem
       }
-    }
-    else
-    {
-      while ($zahlhandb -ge $zahlhandbmax -or $Auslastung -ge 75)
-      {
-        if ($wartehb -lt 1)
-        {
+    }else{
+      if($zahlhandb -ge $zahlhandbmax){
+        if ($wartehb -lt 1){
           Write-Host -Object 'warte auf Handbrake'
           $wartehb = 1
+          }
         }
-        Start-Sleep -Seconds $waitprocess
-        $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
-        Get-VariableInstanzen
+      if($zahlhandb -lt $zahlhandbmax){
+        if ($wartehb -lt 1){
+          Write-Host -Object 'warte auf Handbrake'
+          $wartehb = 1
+          while ($Auslastung -ge 75){
+            Start-Sleep -Milliseconds 500
+            $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
+            Get-VariableInstanzen
+          }
+        }
       }
       $wartehb = 0
-      if($series720p -eq 0)
-      {
+      if($series720p -eq 0){
         Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" --vfr --enable-hw-decoding `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" -R `"$handbrakehz`" --normalize-mix `"$handbrakenormalize`" -D `"$HBDRC`" -i `"$oldfile`" -o `"$newfile`""
         Write-Oldfileitem
       }
-      if($series720p -eq 1)
-      {
+      if($series720p -eq 1){
         Start-Process -FilePath $handbrakeexe -ArgumentList  "-e x265 --encoder-preset `"${encoder-preset}`" -l 720 --loose-anamorphic --keep-display-aspect --vfr --enable-hw-decoding `"$HBHWDec`" --quality `"$videoquality`" --subtitle-lang-list `"$subtitlelanglist`" --first-subtitle --audio-lang-list `"$audiotitlelanglist`" --first-audio -E `"$handbrakeaudiocodec`" --mixdown `"$hbmixdown`" -B `"$handbrakeaudiobitrate`" -R `"$handbrakehz`" --normalize-mix `"$handbrakenormalize`" -D `"$HBDRC`" -i `"$oldfile`" -o `"$newfile`""
         Write-Oldfileitem
       }
     }
   }
-
   #Encode Video only with HandbrtakeCli
   function Invoke-HandbrakeEncoderaudiocopy  {
     $zahlhandb = (Get-Process -Name 'HandbrakeCLI*').count
@@ -414,7 +404,7 @@ try
   $PickFolder.ShowReadOnly = $false
   $PickFolder.ReadOnlyChecked = $true
   $PickFolder.ValidateNames = $false
- 
+
   $result = $PickFolder.ShowDialog()
   if($result -eq [Windows.Forms.DialogResult]::OK)
   {
@@ -472,7 +462,7 @@ $filelist = Get-ChildItem -Path "$destFolder" -Include $extensions -Recurse
       Clear-Host
       Write-Host -Object -Filestats---------------------------------------------------------------------
       Write-Host -Object "MKV Batch Encoding File $i of $filecount - $progress%"
-      Write-Host -Object "Processing : $oldfile" 
+      Write-Host -Object "Processing : $oldfile"
       Write-Host -Object "Audiocount / Format / Channels : $audiocount / $audioformat / $audiochanels"
       Write-Host -Object "Videoformat / Resolution : $videoformat / $videoresW : $videoresH"
       Write-Host -Object "VideoLaufzeit : $videodauer / $videodauerminuten"
@@ -483,7 +473,7 @@ $filelist = Get-ChildItem -Path "$destFolder" -Include $extensions -Recurse
       #endregion Write host
       Test-NewFileExists #Check ob die encodierte Datei schon existiert
       Test-Series #Check ob Serie oder Film
-  
+
       #ist AAC und ist HEVC
       if ($audioformat -eq ${audio-codec-aac} -AND $videoformat -eq ${video-codec-hevc})
       {
@@ -500,7 +490,7 @@ $filelist = Get-ChildItem -Path "$destFolder" -Include $extensions -Recurse
           continue
         }
       }
-  
+
       #kein AAC aber HEVC - FFMPEG
       if ($audioformat -NE ${audio-codec-aac} -AND $videoformat -eq ${video-codec-hevc})
       {
@@ -577,5 +567,5 @@ $filelist = Get-ChildItem -Path "$destFolder" -Include $extensions -Recurse
 }
 finally
 {Get-Variable |Where-Object -Property Name -NotIn -Value $existingVariables.Name |Remove-Variable}
-  
+
 

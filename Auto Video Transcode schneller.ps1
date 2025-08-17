@@ -12,7 +12,7 @@ $extensions = @('.mkv', '.mp4', '.avi', '.m2ts')
 $crfTargetm = 22
 $crfTargets = 20
 $encoderPreset = 'medium'
-$audioCodecBitrate192 = '192k'
+$audioCodecBitrate160 = '160k'
 $audioCodecBitrate128 = '128k'
 $videoCodecHEVC = 'HEVC'
 $force720p = $false
@@ -23,6 +23,11 @@ $targetExtension = '.mkv'
 $script:series = $false
 $script:filesnotnorm = @()
 $script:filesnorm = @()
+
+# === Rekodierungsentscheidung basierend auf Laufzeit und Dateigröße ===
+$OptimalMBPerMinute = 26.36
+$ToleranceFactor = 1.1
+
 
 #endregion
 
@@ -200,6 +205,65 @@ function Get-MediaInfo {# Funktion zum Extrahieren von Mediendaten mit FFmpeg
         catch {
             $mediaInfo.Interlaced = $false
         }
+
+        
+        # Farbtiefe, Farbraum, Farbbereich und HDR-Info extrahieren
+        # Beispiele aus FFmpeg:
+        #   hevc (Main 10), yuv420p10le(tv, bt2020nc/bt2020/smpte2084)
+        #   hevc (Main), yuv420p(tv, bt709)
+        #   yuv422p12le
+        if ($infoOutput -match "yuv\d{3}p(\d{2})\w*\(([^)]*)\)") {
+            $bitDepth = [int]$matches[1]
+            $mediaInfo.BitDepth = $bitDepth
+            $mediaInfo.Is12BitOrMore = $bitDepth -ge 12
+
+            $colorInfoRaw = $matches[2].Split("/") # z. B. "tv, bt2020nc, bt2020, smpte2084"
+            foreach ($entry in $colorInfoRaw) {
+                $trimmed = $entry.Trim()
+                if ($trimmed -match "^(tv|pc)$") {
+                    $mediaInfo.ColorRange = $trimmed
+                }
+                elseif ($trimmed -match "^bt\d{3,4}$") {
+                    $mediaInfo.ColorPrimaries = $trimmed
+                }
+                elseif ($trimmed -match "smpte2084|arib-std-b67|hlg|pq") {
+                    $mediaInfo.TransferCharacteristics = $trimmed
+                }
+            }
+        }
+        elseif ($infoOutput -match "yuv\d{3}p(\d{2})\w*") {
+            # Bit-Tiefe ohne Farbraum-Klammer erkannt
+            $bitDepth = [int]$matches[1]
+            $mediaInfo.BitDepth = $bitDepth
+            $mediaInfo.Is12BitOrMore = $bitDepth -ge 12
+        }
+        elseif ($infoOutput -match "yuv\d{3}p\b") {
+            # z. B. yuv420p → implizit 8 Bit
+            $mediaInfo.BitDepth = 8
+            $mediaInfo.Is12BitOrMore = $false
+        }
+        elseif ($infoOutput -match "(\d+)-bit") {
+            # fallback, falls explizit "10-bit" o. ä. in der Ausgabe steht
+            $bitDepth = [int]$matches[1]
+            $mediaInfo.BitDepth = $bitDepth
+            $mediaInfo.Is12BitOrMore = $bitDepth -ge 12
+        }
+        else {
+            $mediaInfo.BitDepth = "Unbekannt"
+            $mediaInfo.Is12BitOrMore = $false
+        }
+
+        # HDR prüfen anhand von bekannten Begriffen in der FFmpeg-Ausgabe
+        if ($infoOutput -match "(HDR10\+?|Dolby\s+Vision|HLG|Hybrid\s+Log-Gamma|PQ|BT\.2020|smpte2084|arib-std-b67)") {
+            $mediaInfo.HDR = $true
+            $mediaInfo.HDR_Format = $matches[1]
+        } else {
+            $mediaInfo.HDR = $false
+            $mediaInfo.HDR_Format = "Kein HDR"
+        }
+
+
+
         # Audiokanäle extrahieren
         # Versuche, die Anzahl der Audiokanäle aus verschiedenen FFmpeg-Ausgabeformaten zu extrahieren
         if ($infoOutput -match "Audio:.*?,\s*\d+\s*Hz,\s*([0-9\.]+)\s*channels?") {
@@ -249,6 +313,27 @@ function Get-MediaInfo {# Funktion zum Extrahieren von Mediendaten mit FFmpeg
         }
         Write-Host "Video: $($mediaInfo.DurationFormatted1) | $($mediaInfo.VideoCodec) | $($mediaInfo.Resolution) | Interlaced: $($mediaInfo.Interlaced)" -ForegroundColor DarkCyan
         Write-Host "Audio: $($mediaInfo.AudioChannels) Kanäle: | $($mediaInfo.AudioCodec)" -ForegroundColor DarkCyan
+
+        if ($mediaInfo.Duration -gt 0) {
+            $durationMinutes = $mediaInfo.Duration / 60
+            $currentSizeMB = $Size / 1MB
+            $optimalSizeMB = $durationMinutes * $OptimalMBPerMinute * $ToleranceFactor
+
+            $mediaInfo.FileSizeMB = [math]::Round($currentSizeMB, 2)
+            $mediaInfo.OptimalMaxSizeMB = [math]::Round($optimalSizeMB, 2)
+            $mediaInfo.NeedsRecode = $currentSizeMB -gt $optimalSizeMB
+
+            if ($mediaInfo.NeedsRecode) {
+                Write-Host "❌ Recode empfohlen: Datei ist zu groß. $($mediaInfo.FileSizeMB) MB bei $([math]::Round($durationMinutes)) Min (max. erlaubt: $($mediaInfo.OptimalMaxSizeMB) MB)" -ForegroundColor Red
+                $mediaInfo.NeedsRecode = $true
+            } else {
+                Write-Host "✅ Keine Rekodierung nötig. Größe: $($mediaInfo.FileSizeMB) MB bei $([math]::Round($durationMinutes)) Min (max. erlaubt: $($mediaInfo.OptimalMaxSizeMB) MB)" -ForegroundColor Green
+                $mediaInfo.NeedsRecode = $false
+            }
+        } else {
+            Write-Host "WARNUNG: Dauer ist 0, keine Recode-Entscheidung möglich" -ForegroundColor Yellow
+            $mediaInfo.NeedsRecode = $false
+        }
     }
     catch {
         Write-Host "FEHLER: Fehler beim Abrufen der Mediendaten: $_" -ForegroundColor Red
@@ -409,8 +494,6 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
         [int]$audioChannels, # Anzahl der Audiokanäle in der Eingabedatei
         [string]$videoCodec, # Video Codec der Eingabedatei
         [bool]$interlaced # Gibt an, ob das Video interlaced ist
-
-
     )
     try {
 # FFmpeg-Argumente basierend auf der Anzahl der Audiokanäle, Bildgröße und Quellcodec erstellen
@@ -423,6 +506,22 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
             "-y", # Überschreibe Ausgabedateien ohne Nachfrage
             "-i", "`"$($filePath)`"" # Eingabedatei
         )
+
+        #Konvertieren, wenn der Video Codec HEVC (Datei zu groß) ist und die Variable $force720p nicht gesetzt ist
+        if ($videoCodec -match $videoCodecHEVC -AND -not $force720p -match "true" -And $fileSize -gt $maxFileSize) {
+            Write-Host "Video Transode (Filesize)..." -NoNewline -ForegroundColor Cyan
+            $ffmpegArguments += @(
+                "-c:v", "libx265", # Video-Codec auf HEVC setzen
+                "-avoid_negative_ts", "make_zero", # Negative Timestamps vermeiden
+                "-preset", $encoderPreset, # Encoder-Voreinstellung verwenden
+                "-crf", $crfTarget,  # CRF-Wert für die Qualität
+                "-x265-params", "aq-mode=3:psy-rd=2.0:psy-rdoq=1.0:rd=4"
+                if ($interlaced -eq $true) {
+                    Write-Host "Deinterlacing..." -NoNewline -ForegroundColor Cyan
+                    "-vf", "yadif=0:-1:0,hqdn3d=1.5:1.5:6:6" # Deinterlacing-Filter anwenden
+                }else{"-vf", "hqdn3d=1.5:1.5:6:6"}
+            )
+        }
 
 
 # konvertieren, wenn der Video Codec nicht HEVC ist
@@ -437,9 +536,7 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
                 if ($interlaced -eq $true) {
                     Write-Host "Deinterlacing..." -NoNewline -ForegroundColor Cyan
                     "-vf", "yadif=0:-1:0,hqdn3d=1.5:1.5:6:6" # Deinterlacing-Filter anwenden
-                }else{
-                    "-vf", "hqdn3d=1.5:1.5:6:6"
-                }
+                }else{"-vf", "hqdn3d=1.5:1.5:6:6"}
             )
         }
 # Überprüfen, ob die Auflösung 720p ist und die Variable $force720p gesetzt ist
@@ -449,13 +546,9 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
                 "-c:v", "libx265", # Video-Codec auf HEVC setzen
                 "-avoid_negative_ts", "make_zero", # Negative Timestamps vermeiden
                 "-preset", $encoderPreset, # Encoder-Voreinstellung verwenden
-                "-crf", $crfTarget,  # CRF-Wert für die Qualität
                 "-x265-params", "aq-mode=3:psy-rd=2.0:psy-rdoq=1.0:rd=4"
-                if ($script:series -eq $true) {
-                    "-crf", $crfTargets  # CRF-Wert für die Qualität
-                }else{
-                    "-crf", $crfTargetm # CRF-Wert für die Qualität
-                }
+                if ($script:series -eq $true) {"-crf", $crfTargets}  #CRF-Wert für die Qualität
+                else{"-crf", $crfTargetm}# CRF-Wert für die Qualität
                 if ($interlaced -eq $true) {
                     Write-Host "Deinterlacing und Scaling..." -NoNewline -ForegroundColor Cyan
                     "-vf", "yadif=0:-1:0,scale=1280:720,hqdn3d=1.5:1.5:6:6" # Deinterlacing-Filter anwenden
@@ -469,9 +562,7 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
         if ($videoCodec -eq $videoCodecHEVC -AND -not $force720p) {
             Write-Host "Video copy..." -NoNewline -ForegroundColor Cyan
             # Video-Codec beibehalten, wenn er bereits HEVC ist
-            $ffmpegArguments += @(
-                "-c:v", "copy" # Video Codec kopieren
-            )
+            $ffmpegArguments += @("-c:v", "copy") # Video Codec kopieren
         }
 # Überprüfen, ob die Anzahl der Audiokanäle größer als 2 ist
         if ($audioChannels -gt 2) {
@@ -480,6 +571,7 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
                 "-c:a", "libfdk_aac", # Audio-Codec auf AAC setzen
                 "-profile:a", "aac_he", # AAC-Profil setzen
                 "-ac", $audioChannels, # Anzahl der Audiokanäle beibehalten
+                "-b:a", $audioCodecBitrate160, # Audio-Bitrate setzen
                 "-channel_layout", "5.1" # Kanal-Layout setzen
             )
         }
@@ -489,7 +581,8 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
             $ffmpegArguments += @(
                 "-c:a", "libfdk_aac", # Audio-Codec auf AAC setzen
                 "-profile:a", "aac_he", # AAC-Profil setzen
-                "-b:a", $audioCodecBitrate192 # Audio-Bitrate setzen
+                "-b:a", $audioCodecBitrate160 # Audio-Bitrate setzen
+                "-ar", "48000" # Abtastrate auf 48kHz setzen
             )
         }
 # Überprüfen, ob die Anzahl der Audiokanäle kleiner oder gleich 1 ist
@@ -499,6 +592,7 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
                 "-c:a", "libfdk_aac", # Audio-Codec auf AAC setzen
                 "-profile:a", "aac_he", # AAC-Profil setzen
                 "-b:a", $audioCodecBitrate128 # Audio-Bitrate setzen
+                "-ar", "48000" # Abtastrate auf 48kHz setzen
             )
         }
 # Metadaten setzen, untertitel kopieren und Lautstärke anpassen
@@ -513,13 +607,17 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
         )
         Write-Host "FFmpeg-Argumente: $($ffmpegArguments -join ' ')" -ForegroundColor DarkCyan
 # FFmpeg-Prozess zur Lautstärkeanpassung starten
-        Start-Process -FilePath $ffmpegPath -ArgumentList $ffmpegArguments -NoNewWindow -Wait -PassThru -ErrorAction Stop
-        Write-Host "Lautstärkeanpassung abgeschlossen für: $($filePath)" -ForegroundColor Green
+        $process = Start-Process -FilePath $ffmpegPath -ArgumentList $ffmpegArguments -NoNewWindow -Wait -PassThru -ErrorAction Stop
+        if ($process.ExitCode -eq 0) {
+            Write-Host "Lautstärkeanpassung abgeschlossen für: $($filePath)" -ForegroundColor Green
+            return $true
+        } else {
+            Write-Host "FEHLER: FFmpeg-Prozess mit Exit-Code $($process.ExitCode) beendet" -ForegroundColor Red
+            return $false
+        }
 
     }
-    catch {
-        Write-Host "FEHLER: Fehler bei der Lautstärkeanpassung: $_" -ForegroundColor Red
-    }
+    catch {Write-Host "FEHLER: Fehler bei der Lautstärkeanpassung: $_" -ForegroundColor Red}
 }
 function Test-OutputFile {# Überprüfe die Ausgabedatei, sobald der Prozess abgeschlossen ist
     param (
@@ -631,7 +729,7 @@ function Test_Fileintregity {# Überprüfe die Integrität der Datei (Streamfehl
     $ffmpegFehlero | Out-File -FilePath $tempFehlerDatei -Encoding UTF8
 
 # Auswertung des Exitcodes für das Ausgabe-File
-    if (($exitCodeo -eq 0 -and [string]::IsNullOrWhiteSpace($ffmpegFehlero)) -or 
+    if (($exitCodeo -eq 0 -and [string]::IsNullOrWhiteSpace($ffmpegFehlero)) -or
         ($ffmpegFehlero -match "Application provided invalid, non monotonically increasing dts to muxer in stream 0")) {
         Write-Host "OK: $outputFile" -ForegroundColor Green
     } else {
@@ -674,7 +772,7 @@ function Test_Fileintregity {# Überprüfe die Integrität der Datei (Streamfehl
                 Remove-Item $logDatei -Force -ErrorAction Stop
             } catch {
                 Write-Host "FEHLER beim Löschen von Dateien: $_" -ForegroundColor Red
-                Write-Host "  Datei: $($_.Exception.ItemName)" -ForegroundColor Red 
+                Write-Host "  Datei: $($_.Exception.ItemName)" -ForegroundColor Red
                 Write-Host "  Fehlercode: $($_.Exception.HResult)" -ForegroundColor Red
                 Write-Host "  Fehlertyp: $($_.Exception.GetType().FullName)" -ForegroundColor Red
             }
@@ -717,7 +815,7 @@ function Remove-Files {# Funktion zum Aufräumen und Umbenennen von Dateien
             }
             catch {
                 Write-Host "FEHLER beim Löschen von Dateien: $_" -ForegroundColor Red
-                Write-Host "  Datei: $($_.Exception.ItemName)" -ForegroundColor Red 
+                Write-Host "  Datei: $($_.Exception.ItemName)" -ForegroundColor Red
                 Write-Host "  Fehlercode: $($_.Exception.HResult)" -ForegroundColor Red
                 Write-Host "  Fehlertyp: $($_.Exception.GetType().FullName)" -ForegroundColor Red
             }
