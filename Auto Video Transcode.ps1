@@ -47,13 +47,12 @@ $filePath = ''
 $extensions = @('*.mkv', '*.mp4', '*.avi', '*.m2ts')
 
 # Encoder-Voreinstellungen (können angepasst werden)
-$crfTarget = 23
+$crfTarget = 22
 $encoderPreset = 'medium'
 $audioCodecBitrate192 = '192k'
 $audioCodecBitrate128 = '128k'
 $videoCodecHEVC = 'HEVC'
 $force720p = $false
-
 
 # Standard-Dateierweiterung für die Ausgabe
 $targetExtension = '.mkv'
@@ -61,6 +60,8 @@ $targetExtension = '.mkv'
 #endregion
 
 #region Hilfsfunktionen
+
+# Funktion zum Überprüfen der Tags (GAINED, NORMALIZED, LUFS)
 function Get-MediaInfo {# Funktion zum Extrahieren von Mediendaten mit FFmpeg
     param (
         [string]$filePath # Pfad zur Eingabedatei
@@ -110,6 +111,11 @@ function Get-MediaInfo {# Funktion zum Extrahieren von Mediendaten mit FFmpeg
             Write-Host "WARNUNG: Konnte FPS nicht aus der FFmpeg-Ausgabe extrahieren" -ForegroundColor Yellow
             $mediaInfo.FPS = 0
         }
+        #Dateigröße extrahieren
+        $Size = (Get-Item $filePath).Length
+        $FileSizei = "{0:N2} MB" -f ($Size / 1MB)
+        Write-Host "Dateigröße: $($FileSizei)" -ForegroundColor DarkCyan
+
         # Dauer extrahieren
         if ($infoOutput -match "Duration:\s*(\d+):(\d+):(\d+)\.(\d+)") {
             $hours = [int]$matches[1]
@@ -120,8 +126,6 @@ function Get-MediaInfo {# Funktion zum Extrahieren von Mediendaten mit FFmpeg
             $totalSeconds = $hours * 3600 + $minutes * 60 + $seconds + ($milliseconds / 100)
             $mediaInfo.Duration = $totalSeconds
             $mediaInfo.DurationFormatted1 = "{0:D2}:{1:D2}:{2:D2}.{3:D2}" -f $hours, $minutes, $seconds, $milliseconds
-            #Write-Host "Extrahierte Dauer: $($mediaInfo.DurationFormatted1)" -ForegroundColor DarkCyan
-
         }
         else {
             Write-Host "WARNUNG: Konnte Dauer nicht aus der FFmpeg-Ausgabe extrahieren" -ForegroundColor Yellow
@@ -264,7 +268,7 @@ function Get-MediaInfo2 { #keine file vorhanden prüfung
         # Führe expliziten Befehl statt Umleitung aus, um korrekte Fehlerausgabe zu erhalten
         $startInfo = New-Object System.Diagnostics.ProcessStartInfo
         $startInfo.FileName = $ffmpegPath
-        $startInfo.Arguments = "-i `"$filePath`""
+        $startInfo.Arguments = "-i `"$outputFile`""
         $startInfo.RedirectStandardError = $true
         $startInfo.RedirectStandardOutput = $true
         $startInfo.UseShellExecute = $false
@@ -276,6 +280,7 @@ function Get-MediaInfo2 { #keine file vorhanden prüfung
 
         $infoOutput = $process.StandardError.ReadToEnd()
         $process.WaitForExit()
+
 # Extrahiere die Dauer mit einem verbesserten Regex-Pattern
         if ($infoOutput -match "Duration:\s*(\d+):(\d+):(\d+)\.(\d+)") {
             $hours = [int]$matches[1]
@@ -285,7 +290,6 @@ function Get-MediaInfo2 { #keine file vorhanden prüfung
             $totalSeconds = $hours * 3600 + $minutes * 60 + $seconds + ($milliseconds / 100)
             $mediaInfo.Duration = $totalSeconds
             $mediaInfo.DurationFormatted = "{0:D2}:{1:D2}:{2:D2}.{3:D2}" -f $hours, $minutes, $seconds, $milliseconds
-            Write-Host "Extrahierte Dauer: $($mediaInfo.DurationFormatted)" -ForegroundColor DarkCyan
         }
         else {
             Write-Host "WARNUNG: Konnte Dauer nicht aus der FFmpeg-Ausgabe extrahieren" -ForegroundColor Yellow
@@ -419,6 +423,8 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
             "-y", # Überschreibe Ausgabedateien ohne Nachfrage
             "-i", "`"$($filePath)`"" # Eingabedatei
         )
+
+
 # konvertieren, wenn der Video Codec nicht HEVC ist
         if ($videoCodec -ne $videoCodecHEVC -AND -not $force720p -match "true") {
             Write-Host "Video Transode..." -NoNewline -ForegroundColor Cyan
@@ -438,7 +444,7 @@ function Set-VolumeGain {# Funktion zur Anpassung der Lautstärke mit FFmpeg
         }
 # Überprüfen, ob die Auflösung 720p ist und die Variable $force720p gesetzt ist
         if ($force720p -match "true") {
-            Write-Host "Video transcoe mit resize..." -NoNewline -ForegroundColor Cyan
+            Write-Host "Video transcode mit resize..." -NoNewline -ForegroundColor Cyan
             $ffmpegArguments += @(
                 "-c:v", "libx265", # Video-Codec auf HEVC setzen
                 "-avoid_negative_ts", "make_zero", # Negative Timestamps vermeiden
@@ -517,7 +523,7 @@ function Test-OutputFile {# Überprüfe die Ausgabedatei, sobald der Prozess abg
         [object]$sourceInfo,
         [string]$targetExtension
         )
-    Write-Host "Überprüfe die Ausgabedatei: $outputFile" -ForegroundColor Cyan
+    Write-Host "Überprüfe Ausgabedatei und Quelldatei" -ForegroundColor Cyan
 # Warte kurz, um sicherzustellen, dass die Datei vollständig geschrieben wurde
     Start-Sleep -Seconds 2
 
@@ -532,20 +538,29 @@ function Test-OutputFile {# Überprüfe die Ausgabedatei, sobald der Prozess abg
         Write-Host "  Die Ausgabedatei wurde erfolgreich erfasst." -ForegroundColor Green
         Write-Host "  Quelldatei-Dauer: $($sourceInfo.DurationFormatted1) | Audiokanäle: $($sourceInfo.AudioChannels)" -ForegroundColor Blue
         Write-Host "  Ausgabedatei-Dauer: $($outputInfo.DurationFormatted) | Audiokanäle: $($outputInfo.AudioChannels)" -ForegroundColor Blue
+        #Dateigröße extrahieren
+        $Size = (Get-Item $outputFile).Length
+        $FileSizeo = "{0:N2} MB" -f ($Size / 1MB)
+        $Size = (Get-Item $sourceFile).Length
+        $FileSizei = "{0:N2} MB" -f ($Size / 1MB)
+        Write-Host "  Quelldatei-Größe: $($FileSizei)" -ForegroundColor DarkCyan
+        Write-Host "  Ausgabedatei-Größe: $($FileSizeo)" -ForegroundColor DarkCyan
     }
 # Überprüfe die Laufzeit beider Dateien (mit einer kleinen Toleranz von 1 Sekunde)
     $durationDiff = [Math]::Abs($sourceInfo.Duration - $outputInfo.Duration)
     if ($durationDiff -gt 1) {
         Write-Host "  WARNUNG: Die Laufzeiten unterscheiden sich um $durationDiff Sekunden!" -ForegroundColor Red
         return $false
+    }else {
+        Write-Host "  Die Laufzeiten stimmen überein." -ForegroundColor Green
     }
-    Write-Host "  OK: Die Laufzeiten stimmen überein." -ForegroundColor Green
 # Überprüfe die Anzahl der Audiokanäle beider Dateien
     if ($sourceInfo.AudioChannels -ne $outputInfo.AudioChannels) {
         Write-Host "  WARNUNG: Die Anzahl der Audiokanäle hat sich geändert! (Quelle: $($sourceInfo.AudioChannels), Ausgabe: $($outputInfo.AudioChannels))" -ForegroundColor Red
         return $false
+    }else {
+        Write-Host "  Die Anzahl der Audiokanäle ist gleich geblieben." -ForegroundColor Green
     }
-    Write-Host "  OK: Die Anzahl der Audiokanäle ist gleich geblieben." -ForegroundColor Green
     return $true
 }
 function Test_Fileintregity {# Überprüfe die Integrität der Datei (Streamfehler)
@@ -566,7 +581,7 @@ function Test_Fileintregity {# Überprüfe die Integrität der Datei (Streamfehl
     $logDatei = Join-Path -Path $destFolder -ChildPath "MKV_Überprüfung.log"
     $date = Get-Date -Format "yyyy-MM-dd"
 
-    Write-Host "Überprüfe Datei: $outputFile"
+    Write-Host "Überprüfe Ausgabedatei: $outputFile"
 
 # Temporäre Datei für FFmpeg-Fehlerausgabe
     $tempFehlerDatei = [System.IO.Path]::GetTempFileName()
@@ -630,6 +645,7 @@ function Test_Fileintregity {# Überprüfe die Integrität der Datei (Streamfehl
         $processInfoi.CreateNoWindow = $true
 
 # FFmpeg starten für prüfung $inputFile
+        Write-Host "Überprüfe Quelldatei: $file"
         $process = New-Object System.Diagnostics.Process
         $process.StartInfo = $processInfoi
         $process.Start() | Out-Null
@@ -650,9 +666,12 @@ function Test_Fileintregity {# Überprüfe die Integrität der Datei (Streamfehl
         } else {
 # Wenn beide Dateien Fehler haben, gebe eine Warnung aus
             Write-Host "FEHLER in Datei: $file" -ForegroundColor Red
+            Write-Host "$file und $outputFile haben beide fehler." -ForegroundColor Red
+            Write-Host "Ersetze Quelldatei mit Ausgabedatei." -ForegroundColor green
             Add-Content $logDatei "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $file - FEHLER:"
             Add-Content $logDatei $ffmpegFehleri
             Add-Content $logDatei "$file und $outputFile haben beide fehler."
+            Add-Content $logDatei "Ersetze Quelldatei mit Ausgabedatei."
             Add-Content $logDatei "----------------------------------------"
         }
     }
@@ -775,7 +794,28 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
                 Remove-Files -outputFile $outputFile -sourceFile $file.FullName -targetExtension $targetExtension
             }
             else {
-                Write-Host "Lautstärke bereits im Zielbereich. Keine Anpassung notwendig." -ForegroundColor Green
+                try {
+                    Write-Host "Lautstärke bereits im Zielbereich. Keine Anpassung notwendig." -ForegroundColor Green
+                    $ffmpegArguments += @(
+                        "-hide_banner", # FFmpeg-Banner ausblenden
+                        "-loglevel", "error", # Nur Fehler anzeigen
+                        "-stats", # Statistiken anzeigen
+                        "-y", # Überschreibe Ausgabedateien ohne Nachfrage
+                        "-i", "`"$($filePath)`"" # Eingabedatei
+                        "-c:v", "copy", # Video kopieren
+                        "-c:a", "copy", # Audio kopieren
+                        "-c:s", "copy", # Untertitel kopieren
+                        "-metadata", "LUFS=$targetLoudness", # LUFS-Metadaten setzen
+                        "-metadata", "gained=0", # Gain-Metadaten setzen
+                        "-metadata", "normalized=true", # Normalisierungs-Metadaten setzen
+                        "`"$($outputFile)`"" # Ausgabedatei
+                    )
+                    Write-Host "FFmpeg-Argumente: $($ffmpegArguments -join ' ')" -ForegroundColor DarkCyan
+                    Start-Process -FilePath $ffmpegPath -ArgumentList $ffmpegArguments -NoNewWindow -Wait -PassThru -ErrorAction Stop
+                }
+                catch {
+                    Write-Host "FEHLER: Fehler beim schreiben der Metadaten." -ForegroundColor Red
+                }
             }
         }
         else {
