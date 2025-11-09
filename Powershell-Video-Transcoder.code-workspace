@@ -1,0 +1,35 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../../Testscripts"
+		},
+		{
+			"name": "WLED Schalter",
+			"path": "../../Documents/PlatformIO/Projects/WLED Schalter"
+		}
+	],
+	"settings": {
+		"powershell.cwd": "Powershell-Video-Transcoder",
+		"files.associations": {
+			"MLTable": "yaml",
+			"algorithm": "cpp",
+			"chrono": "cpp",
+			"functional": "cpp",
+			"optional": "cpp",
+			"system_error": "cpp",
+			"type_traits": "cpp",
+			"xlocmon": "cpp",
+			"xtr1common": "cpp",
+			"xutility": "cpp",
+			"istream": "cpp",
+			"ostream": "cpp",
+			"ratio": "cpp",
+			"array": "cpp",
+			"tuple": "cpp",
+			"utility": "cpp"
+		}
+	}
+}
