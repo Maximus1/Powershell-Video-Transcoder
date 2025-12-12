@@ -1327,33 +1327,6 @@ function Remove-Files {
         "`n==== FEHLER bei Umbenennung/Loeschen: $_ ====" | Add-Content -LiteralPath $logDatei
     }
 }
-function Show-MainGui {
-    Add-Type -AssemblyName System.Windows.Forms
-    Add-Type -AssemblyName System.Drawing
-
-    #region 1. Fenster-Initialisierung
-    $mainForm = New-Object System.Windows.Forms.Form
-    $mainForm.Text = "PowerShell Video Transcoder"
-    $mainForm.Size = New-Object System.Drawing.Size(800, 600)
-    $mainForm.StartPosition = 'CenterScreen'
-    $mainForm.MinimumSize = New-Object System.Drawing.Size(640, 480)
-    #endregion
-
-    #region 2. Haupt-Layout-Container
-    $mainTableLayout = New-Object System.Windows.Forms.TableLayoutPanel
-    $mainTableLayout.Dock = 'Fill'
-    $mainTableLayout.ColumnCount = 1
-    $mainTableLayout.RowCount = 3
-    $mainTableLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize))) | Out-Null
-    $mainTableLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize))) | Out-Null
-    $mainTableLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100))) | Out-Null
-    $mainForm.Controls.Add($mainTableLayout)
-    #endregion
-
-    # Zeigt das Fenster an
-    [void]$mainForm.ShowDialog()
-}
-
 #endregion
 
 #region Hauptskript
@@ -1568,7 +1541,5 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
 else {
     Write-Host "Ordnerauswahl abgebrochen." -ForegroundColor Yellow
 }
-
-#Show-MainGui
 
 #endregion

@@ -11,8 +11,8 @@ $filePath = ''
 $extensions = @('.mkv', '.mp4', '.avi', '.m2ts')
 
 #Nutze Hardwarebeschleunigung (encoding) wenn moeglich
-$useHardwareAccel = $true # Setze auf $true, um Hardwarebeschleunigung zu verwenden, wenn verfuegbar.
-#$useHardwareAccel = $false
+#$useHardwareAccel = $true # Setze auf $true, um Hardwarebeschleunigung zu verwenden, wenn verfuegbar.
+$useHardwareAccel = $false
 
 # Qualitaetsvorgaben fuer die Encoder.
 $amd_quality = "quality" # AMD Preset fuer hohe Qualitaet.
