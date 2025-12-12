@@ -544,7 +544,10 @@ function Get-MediaInfo2 {
 function Get-LoudnessInfo {
     # Analysiert die Lautheit (LUFS) einer Audiospur mittels FFmpeg 'ebur128'-Filter.
     param (
-        [string]$filePath # Der Pfad zur zu analysierenden Videodatei.
+        [string]$filePath,
+        [hashtable]$sourceInfo,
+        [string]$logDatei,
+        [string]$ffmpegPath
     )
     # Analysiert die Audiospur einer Datei mit dem FFmpeg 'ebur128'-Filter, um die Lautheit (LUFS) zu bestimmen.
     try {
@@ -566,7 +569,6 @@ function Get-LoudnessInfo {
             $ffmpegArguments = @("-hwaccel", "d3d11va") + $baseArgs
         }
 
-        # Fuehrt FFmpeg aus und liest die Ausgabe live, um eine Fortschrittsanzeige zu ermoeglichen.
         $processInfo = New-Object System.Diagnostics.ProcessStartInfo
         $processInfo.FileName = $ffmpegPath
         $processInfo.Arguments = $ffmpegArguments -join ' '
@@ -578,35 +580,8 @@ function Get-LoudnessInfo {
         $process.StartInfo = $processInfo
         $process.Start() | Out-Null
 
-        $totalFrames = [math]::Round($sourceInfo.Duration1 * $sourceInfo.FPS)
-        $outputBuilder = New-Object System.Text.StringBuilder
-
-        while (-not $process.HasExited) {
-            # Liest die FFmpeg-Ausgabe zeilenweise
-            $line = $process.StandardError.ReadLine()
-            if ($null -ne $line) {
-                [void]$outputBuilder.AppendLine($line)
-                if ($line -like "frame=*") {
-                    $progressMatch = [regex]::Match($line, "frame=\s*(\d+)\s+fps=\s*([\d\.]+)")
-                    if ($progressMatch.Success) {
-                        $processedFrames = [int64]$progressMatch.Groups[1].Value
-                        $currentFps = [double]$progressMatch.Groups[2].Value.Replace('.', ',')
-
-                        if ($currentFps -gt 0 -and $totalFrames -gt 0 -and $processedFrames -le $totalFrames) {
-                            $remainingFrames = $totalFrames - $processedFrames
-                            $remainingExecutionSeconds = $remainingFrames / $currentFps
-                            $remainingTimeSpan = [TimeSpan]::FromSeconds($remainingExecutionSeconds)
-                            $percentComplete = ($processedFrames / $totalFrames) * 100
-                            $progressText = "Analyse-Fortschritt: {0:N2}% | Verbleibend: {1:hh\h\:mm\m\:ss\s}" -f $percentComplete, $remainingTimeSpan
-                            Write-Host "`r$progressText" -NoNewline -ForegroundColor Gray
-                        }
-                    }
-                }
-            }
-        }
-        Write-Host "" # Zeilenumbruch nach der Fortschrittsanzeige
         $process.WaitForExit()
-        $ffmpegOutput = $outputBuilder.ToString()
+        $ffmpegOutput = $process.StandardError.ReadToEnd()
         return $ffmpegOutput
     }
     catch {
@@ -618,13 +593,24 @@ function Get-LoudnessInfo {
 function Set-VolumeGain {
     # Funktion zur Anpassung der Lautstaerke mit FFmpeg
     param (
-        [string]$filePath, # Pfad zur Eingabedatei
-        [double]$gain, # Der anzuwendende Gain-Wert in dB
-        [string]$outputFile, # Pfad fuer die Ausgabedatei
-        [int]$audioChannels, # Anzahl der Audiokanaele in der Eingabedatei
-        [string]$videoCodec, # Video Codec der Eingabedatei
-        [bool]$interlaced, # Gibt an, ob das Video interlaced ist
-        [int]$bitDepth # Bittiefe des Videos
+        [string]$filePath,
+        [double]$gain,
+        [string]$outputFile,
+        [int]$audioChannels,
+        [string]$videoCodec,
+        [bool]$interlaced,
+        [int]$bitDepth,
+        [hashtable]$sourceInfo,
+        [string]$logDatei,
+        [string]$ffmpegPath,
+        [string]$videoEncoder,
+        [string]$encoderPreset,
+        [int]$crfTargets,
+        [int]$crfTargetm,
+        [string]$amd_quality,
+        [string]$Nvidia_quality,
+        [int]$targetLoudness,
+        [string]$targetVideoCodec
     )
 
     $videoCopyFlag = $false
@@ -901,6 +887,12 @@ function Set-VolumeGain {
             Write-Host ""
 
             $process.WaitForExit()
+            
+            $remainingErrors = $process.StandardError.ReadToEnd()
+            if ($remainingErrors) {
+                $allErrors += $remainingErrors.Split([System.Environment]::NewLine)
+            }
+            
             $exitCode = $process.ExitCode
             if ($exitCode -eq 0) {
                 Write-Host "Lautstaerkeanpassung abgeschlossen fuer: $($filePath)" -ForegroundColor Green
@@ -908,13 +900,17 @@ function Set-VolumeGain {
                 return [PSCustomObject]@{Success = $true; VideoCopy = $videoCopyFlag; AudioCopy = $audioCopyFlag}
             }
             else {
-                throw "FFmpeg-Prozess schlug fehl mit Exit-Code $exitCode"
+                $errorMessage = ($allErrors | Where-Object { $_ -match '\S' }) -join "`n"
+                throw "FFmpeg-Prozess schlug fehl mit Exit-Code $exitCode`nFFmpeg-Ausgabe:`n$errorMessage"
 
             }
         }
         catch {
-            Write-Host "Fehler - Versuche CPU encoding" -ForegroundColor Red
-            "`n==== Fehler - Versuche CPU encoding ====" | Add-Content -LiteralPath $logDatei
+            Write-Host "Fehler bei GPU-Encoding:" -ForegroundColor Red
+            Write-Host "$_" -ForegroundColor DarkRed
+            "`n==== Fehler bei GPU-Encoding: `n$_ ====" | Add-Content -LiteralPath $logDatei
+            Write-Host "Versuche CPU encoding (libx265)..." -ForegroundColor Yellow
+            "`n==== Versuche CPU encoding (libx265)... ====" | Add-Content -LiteralPath $logDatei
             if ($videoEncoder -eq "hevc_nvenc") {
                 # NVIDIA
                 $ffmpegArguments -= @(
@@ -1011,6 +1007,12 @@ function Set-VolumeGain {
             Write-Host ""
 
             $process.WaitForExit()
+            
+            $remainingErrors = $process.StandardError.ReadToEnd()
+            if ($remainingErrors) {
+                $cpuErrors += $remainingErrors.Split([System.Environment]::NewLine)
+            }
+            
             $exitCode = $process.ExitCode
 
         }
@@ -1022,11 +1024,11 @@ function Set-VolumeGain {
             return [PSCustomObject]@{Success = $true; VideoCopy = $videoCopyFlag; AudioCopy = $audioCopyFlag}
         }
         else {
-            Write-Host "FEHLER: FFmpeg-Prozess mit Exit-Code $exitCode beendet" -ForegroundColor Red
-            "`n==== FEHLER: FFmpeg-Prozess mit Exit-Code $exitCode beendet ====" | Add-Content -LiteralPath $logDatei
-            # Gibt die letzten Fehlerzeilen aus, um die Diagnose zu erleichtern.
-            $errorOutput = $process.StandardError.ReadToEnd()
-            Write-Host "FFmpeg-Fehlerausgabe: $errorOutput" -ForegroundColor DarkRed
+            Write-Host "FEHLER: CPU-Encoding fehlgeschlagen mit Exit-Code $exitCode" -ForegroundColor Red
+            "`n==== FEHLER: CPU-Encoding fehlgeschlagen mit Exit-Code $exitCode ====" | Add-Content -LiteralPath $logDatei
+            $errorOutput = ($cpuErrors | Where-Object { $_ -match '\S' }) -join "`n"
+            Write-Host "FFmpeg-Fehlerausgabe:`n$errorOutput" -ForegroundColor DarkRed
+            "`n==== FFmpeg-Fehlerausgabe:`n$errorOutput ====" | Add-Content -LiteralPath $logDatei
             return [PSCustomObject]@{Success = $false; VideoCopy = $videoCopyFlag; AudioCopy = $audioCopyFlag}
         }
 
@@ -1362,11 +1364,25 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
 
     # Sucht rekursiv nach allen relevanten Videodateien im ausgewaehlten Ordner. Die .NET-Methode ist schneller als Get-ChildItem.
     $startTime = Get-Date
-    $mkvFiles = [System.IO.Directory]::EnumerateFiles($destFolder, '*.*', [System.IO.SearchOption]::AllDirectories) | Where-Object { ($extensions -contains [System.IO.Path]::GetExtension($_).ToLowerInvariant()) -and ((Get-Item (Split-Path -Path $_ -Parent)).Name -ne "Fertig") } | Sort-Object
+    $fileCount = 0
+    
+    $mkvFiles = [System.IO.Directory]::EnumerateFiles($destFolder, '*.*', [System.IO.SearchOption]::AllDirectories) | 
+        Where-Object { 
+            ($extensions -contains [System.IO.Path]::GetExtension($_).ToLowerInvariant()) -and 
+            ((Get-Item (Split-Path -Path $_ -Parent)).Name -ne "Fertig") 
+        } | 
+        ForEach-Object {
+            $fileCount++
+            Write-Host "`rRelevante Dateien gefunden: $fileCount" -NoNewline -ForegroundColor Cyan
+            $_
+        } | 
+        Sort-Object
+    
+    Write-Host ""
     $mkvFileCount = ($mkvFiles | Measure-Object).Count
     $endTime = Get-Date
     $duration = $endTime - $startTime
-    Write-Host "Dateiscan-Zeit: $($duration.TotalSeconds) Sekunden" -ForegroundColor Yellow
+    Write-Host "Dateiscan-Zeit: $($duration.TotalSeconds) Sekunden | $mkvFileCount Dateien zur Verarbeitung" -ForegroundColor Yellow
 
     # --- Parallele Überprüfung der Normalisierungs-Tags ---
     Write-Host "Starte parallele Überprüfung der Normalisierungs-Tags für $mkvFileCount Dateien..." -ForegroundColor Cyan
@@ -1438,7 +1454,7 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
             }
 
             # Fuehrt die Lautheitsanalyse durch.
-            $ffmpegOutput = Get-LoudnessInfo -filePath $file
+            $ffmpegOutput = Get-LoudnessInfo -filePath $file -sourceInfo $sourceInfo -logDatei $logDatei -ffmpegPath $ffmpegPath
             if (!$ffmpegOutput) {
                 throw "Konnte Lautstaerkeinformationen nicht extrahieren."
             }
@@ -1455,7 +1471,7 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
                 if ([math]::Abs($gain) -gt 0.2) {
                     Write-Host "Passe Lautstaerke an um $gain dB" -ForegroundColor Yellow
                     "`n==== Passe Lautstaerke an um $gain dB ====" | Add-Content -LiteralPath $logDatei
-                    $encodeResult = Set-VolumeGain -filePath $file -gain $gain -outputFile $outputFile -audioChannels $sourceInfo.AudioChannels -videoCodec $sourceInfo.VideoCodec -interlaced $sourceInfo.Interlaced -bitDepth $sourceInfo.BitDepth
+                    $encodeResult = Set-VolumeGain -filePath $file -gain $gain -outputFile $outputFile -audioChannels $sourceInfo.AudioChannels -videoCodec $sourceInfo.VideoCodec -interlaced $sourceInfo.Interlaced -bitDepth $sourceInfo.BitDepth -sourceInfo $sourceInfo -logDatei $logDatei -ffmpegPath $ffmpegPath -videoEncoder $videoEncoder -encoderPreset $encoderPreset -crfTargets $crfTargets -crfTargetm $crfTargetm -amd_quality $amd_quality -Nvidia_quality $Nvidia_quality -targetLoudness $targetLoudness -targetVideoCodec $targetVideoCodec
                     $videocopy = $encodeResult.VideoCopy
                 }
                 else {

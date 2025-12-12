@@ -98,3 +98,21 @@ Set-ItemProperty -Path $regPath -Name "(Default)" -Value 'C:\Program Files\Power
 ## ⚠️ Haftungsausschluss
 Dieses Skript löscht die Originaldateien nach einer erfolgreichen Konvertierung. Es wird dringend empfohlen, **vor der ersten Anwendung ein Backup Ihrer Daten zu erstellen** oder das Skript zunächst mit Kopien Ihrer Dateien in einem Testordner auszuführen. 
 **Die Nutzung erfolgt auf eigene Gefahr.**
+
+---
+
+## 📊 Feature-Status
+
+| Feature | Status | Hinweise |
+|---------|--------|----------|
+| GPU-Beschleunigung (NVIDIA/AMD) | ✅ Complete | hevc_nvenc, hevc_amf, libx265 Fallback |
+| Metadaten-Analyse | ✅ Complete | Codec, Auflösung, Audio, Interlace, HDR, Bittiefe |
+| Serien-Erkennung | ✅ Complete | SxxExx Pattern-Matching |
+| Normalisierungs-Checking | ✅ Complete | Parallele Überprüfung mit Fortschritts-Tracking |
+| Video-Transkodierung | 🔄 In Development | HEVC-Encoding mit CRF-Optimierung |
+| Audio-Normalisierung | ✅ Complete | EBUR128-Messung, AAC-Kodierung (Session 3 validiert) |
+| AVI-Spezialbehandlung | ✅ Complete | Deinterlace, Denoise, Upscale, Sharpen |
+| Error Handling & Logging | 🔄 In Development | Detaillierte Logs pro Datei |
+| **Code-Qualität** | **✅ Improved** | **Session 2-3: 0 implizite Globals, -21 Zeilen, +18 Parameter** |
+
+---
