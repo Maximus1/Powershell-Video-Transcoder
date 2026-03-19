@@ -5,12 +5,72 @@
 #
 # Leert die im Skript verwendeten Variablen, um einen sauberen und vorhersagbaren Start bei jeder Ausführung zu gewährleisten.
 # Das '-ErrorAction SilentlyContinue' unterdrückt Fehler, falls eine Variable beim ersten Start noch nicht existiert.
-Clear-Variable -Name 'regex', 'selectedPath', 'cachedSeries', 'files', 'file', 'searchResults', 'selectedSeriesUrl', 'guideUrl', 'episodeInfo', 'baseName', 'seriesNameFromFile', 'absoluteEpisodeNumber', 'episodeTitleFromFile', 'newName' -ErrorAction SilentlyContinue
+Clear-Variable -Name 'regex', 'selectedPath', 'cachedSeries', 'files', 'file', 'searchResults', 'selectedSeriesUrl', 'guideUrl', 'episodeInfo', 'baseName', 'seriesNameFromFile', 'absoluteEpisodeNumber', 'episodeTitleFromFile', 'newName', 'retryFiles', 'approvedHiddenCodePattern' -ErrorAction SilentlyContinue
 #
 # Fügt die .NET-Assembly 'System.Windows.Forms' hinzu. Diese wird benötigt, um grafische Benutzeroberflächen (GUIs) wie den Ordnerauswahldialog und das Auswahlfenster für Suchergebnisse zu erstellen.
 Add-Type -AssemblyName System.Windows.Forms
 # Fügt die .NET-Assembly 'System.Web' hinzu. Diese stellt Hilfsprogramme für Web-Anwendungen bereit, insbesondere 'HttpUtility.UrlEncode', um Sonderzeichen und Leerzeichen in Suchbegriffen für eine URL korrekt zu kodieren.
 Add-Type -AssemblyName System.Web
+
+# Fügt eine C#-Klasse hinzu, um die Sortierung der ListView-Spalten zu ermöglichen (Text und Zahlen).
+$code = @"
+using System;
+using System.Collections;
+using System.Windows.Forms;
+
+public class EpisodeSorterComparerV2 : IComparer
+{
+    public int Column { get; set; }
+    public SortOrder Order { get; set; }
+
+    public EpisodeSorterComparerV2()
+    {
+        Column = 0;
+        Order = SortOrder.Ascending;
+    }
+
+    public int Compare(object x, object y)
+    {
+        ListViewItem itemX = x as ListViewItem;
+        ListViewItem itemY = y as ListViewItem;
+
+        // Hauptvergleich auf der gewählten Spalte
+        int result = CompareItems(itemX, itemY, Column);
+
+        // Sekundäre Sortierung: Wenn gleich, dann sortiere nach Code (Spalte 0)
+        if (result == 0 && Column != 0)
+        {
+            result = CompareItems(itemX, itemY, 0);
+        }
+
+        if (Order == SortOrder.Descending)
+        {
+            result = -result;
+        }
+
+        return result;
+    }
+
+    private int CompareItems(ListViewItem itemX, ListViewItem itemY, int colIndex)
+    {
+        string textX = itemX.SubItems.Count > colIndex ? itemX.SubItems[colIndex].Text : "";
+        string textY = itemY.SubItems.Count > colIndex ? itemY.SubItems[colIndex].Text : "";
+
+        double numX, numY;
+        if (double.TryParse(textX, out numX) && double.TryParse(textY, out numY))
+        {
+            return numX.CompareTo(numY);
+        }
+        else
+        {
+            return String.Compare(textX, textY);
+        }
+    }
+}
+"@
+# Verhindert Fehler, falls der Typ in der aktuellen Session bereits existiert
+try { Add-Type -TypeDefinition $code -ReferencedAssemblies System.Windows.Forms -ErrorAction Stop } catch {}
+
 
 # Definiert den regulären Ausdruck (Regex) für die Suche nach Serien auf der Webseite 'fernsehserien.de'.
 # Dieser Ausdruck sucht nach dem gesamten HTML-Block für ein einzelnes Suchergebnis.
@@ -107,11 +167,11 @@ function Invoke-SeriesSearch {
     }
 #
     # Kodiert den normalisierten Namen für die Verwendung in einer URL.
-    $searchUrl = "https://www.fernsehserien.de/suche/$(($encodedName))"
+    $searchUrl = "https://www.fernsehserien.de/suche/$($($encodedName))"
 #
     try {
         # Führt die Web-Anfrage aus. '-UseBasicParsing' ist schneller und vermeidet Abhängigkeiten vom Internet Explorer.
-        $response = Invoke-WebRequest -Uri $searchUrl -UseBasicParsing -ErrorAction Stop
+        $response = Invoke-WebRequest -Uri $searchUrl -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
 
         # Die finale URL nach einer möglichen Weiterleitung.
         # Dies ist die robusteste Methode, da sie direkt die finale URI aus dem Antwortobjekt liest,
@@ -139,13 +199,13 @@ function Invoke-SeriesSearch {
         }
         # Fall 2: Mehrere Treffer, wir sind auf einer Suchergebnisseite.
         else {
-            $matches = [regex]::Matches($response.Content, $regex, "Singleline") # Sucht alle Suchergebnisse im HTML-Inhalt.
+            $regexMatches = [regex]::Matches($response.Content, $regex, "Singleline") # Sucht alle Suchergebnisse im HTML-Inhalt.
             $results = @() # Initialisiert ein leeres Array für die Ergebnisse.
-            foreach ($match in $matches) {
+            foreach ($match in $regexMatches) {
                 $block = $match.Value # Der HTML-Block eines einzelnen Treffers.
                 $titleMatch = [regex]::Match($block, 'title="([^"]+)"') # Extrahiert den Titel der Serie.
                 $urlMatch = [regex]::Match($block, 'href="([^"]+)"') # Extrahiert die relative URL der Serie.
-                $results += [pscustomobject]@{
+                $results += [pscustomobject]@{ 
                     Title    = $titleMatch.Groups[1].Value # Speichert den Titel im Ergebnisobjekt.
                     Url      = "https://www.fernsehserien.de" + $urlMatch.Groups[1].Value # Baut die absolute URL zusammen.
                     ImageUrl = Get-SeriesImageUrl -HtmlContent $block # Ruft die Funktion auf, um die Bild-URL zu extrahieren.
@@ -215,7 +275,7 @@ function Show-SeriesSelectionGui {
     $pictureBox.BorderStyle = 'FixedSingle' # Fügt einen Rahmen um die PictureBox hinzu.
     $form.Controls.Add($pictureBox) # Fügt die PictureBox zum Formular hinzu.
 #
-    $listBox.add_SelectedIndexChanged({ # Fügt einen Event-Handler hinzu, der bei Auswahl eines Eintrags ausgelöst wird.
+    $listBox.add_SelectedIndexChanged({
         # Dieses Ereignis wird ausgelöst, wenn der Benutzer einen Eintrag in der Liste auswählt.
         if ($listBox.SelectedIndex -ge 0) { # Prüft, ob ein gültiger Eintrag ausgewählt wurde.
             $selectedItem = $SearchResults[$listBox.SelectedIndex] # Holt das ausgewählte Ergebnisobjekt.
@@ -225,9 +285,11 @@ function Show-SeriesSelectionGui {
                     # Bild herunterladen und anzeigen
                     $webClient = New-Object System.Net.WebClient # Erstellt einen neuen WebClient zum Herunterladen.
                     $imageBytes = $webClient.DownloadData($imageUrl) # Lädt das Bild als Byte-Array herunter.
-                    # Das Byte-Array explizit als einzelnes Argument übergeben, um das "Entpacken" durch PowerShell zu verhindern.
-                    $memoryStream = New-Object System.IO.MemoryStream(,$imageBytes) # Erstellt einen Speicherstrom aus den Bild-Bytes.
-                    $pictureBox.Image = [System.Drawing.Image]::FromStream($memoryStream) # Lädt das Bild aus dem Speicherstrom in die PictureBox.
+                    if ($imageBytes -and $imageBytes.Length -gt 0) {
+                        # Das Byte-Array explizit als einzelnes Argument übergeben, um das "Entpacken" durch PowerShell zu verhindern.
+                        $memoryStream = New-Object System.IO.MemoryStream(,$imageBytes) # Erstellt einen Speicherstrom aus den Bild-Bytes.
+                        $pictureBox.Image = [System.Drawing.Image]::FromStream($memoryStream) # Lädt das Bild aus dem Speicherstrom in die PictureBox.
+                    }
                 }
                 catch {
                     # Bei Fehler Platzhalter oder nichts anzeigen
@@ -287,7 +349,7 @@ function Get-EpisodeGuideUrl {
         }
         # Wenn es keine Episodenführer-URL ist, muss der Inhalt der Seite geladen werden,
         # um den Link zum Episodenführer zu finden.
-        $response = Invoke-WebRequest -Uri $SeriesUrl -UseBasicParsing -ErrorAction Stop # Lädt den HTML-Inhalt der Serienseite.
+        $response = Invoke-WebRequest -Uri $SeriesUrl -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop # Lädt den HTML-Inhalt der Serienseite.
         $guideMatch = [regex]::Match($response.Content, 'data-menu-item="episodenguide"[^>]*>.*?<a[^>]*href="([^"]+/episodenguide)"') # Sucht den Link zum Episodenführer.
         return "https://www.fernsehserien.de" + $guideMatch.Groups[1].Value # Baut die absolute URL zusammen und gibt sie zurück.
     }
@@ -353,7 +415,32 @@ function Show-EpisodeSelectionGui {
     $listView.View = [System.Windows.Forms.View]::Details # Stellt die Ansicht auf "Details" (mit Spalten).
     $listView.FullRowSelect = $true # Sorgt dafür, dass die ganze Zeile markiert wird.
     $listView.MultiSelect = $false # Erlaubt nur die Auswahl eines Eintrags.
-#
+    
+    # --- NEU: Sortierung aktivieren ---
+    $sorter = New-Object EpisodeSorterComparerV2 # Erstellt den benutzerdefinierten Sorter
+    $listView.ListViewItemSorter = $sorter # Weist ihn der ListView zu
+    
+    # Event-Handler für Spaltenklick
+    $listView.add_ColumnClick({
+        param($sender, $e)
+        
+        # Prüfen, ob die gleiche Spalte erneut geklickt wurde
+        if ($sender.ListViewItemSorter.Column -eq $e.Column) {
+            # Sortierreihenfolge umkehren
+            if ($sender.ListViewItemSorter.Order -eq [System.Windows.Forms.SortOrder]::Ascending) {
+                $sender.ListViewItemSorter.Order = [System.Windows.Forms.SortOrder]::Descending
+            } else {
+                $sender.ListViewItemSorter.Order = [System.Windows.Forms.SortOrder]::Ascending
+            }
+        } else {
+            # Neue Spalte: Standardmäßig aufsteigend sortieren
+            $sender.ListViewItemSorter.Column = $e.Column
+            $sender.ListViewItemSorter.Order = [System.Windows.Forms.SortOrder]::Ascending
+        }
+        $sender.Sort() # Sortierung ausführen
+    })
+    # ----------------------------------
+
     # Definiert die Spalten für die ListView.
     [void]$listView.Columns.Add("Code", 80) # Fügt die Spalte "Code" hinzu.
     [void]$listView.Columns.Add("Titel (Online)", 250) # Fügt die Spalte "Titel (Online)" hinzu.
@@ -367,8 +454,15 @@ function Show-EpisodeSelectionGui {
         [void]$item.SubItems.Add($_.Titel) # Fügt den Online-Titel als Untereintrag hinzu.
         [void]$item.SubItems.Add($FileNameTitle) # Zeigt den Dateinamen-Titel zum direkten Vergleich an.
         [void]$item.SubItems.Add($distance) # Fügt die berechnete Distanz hinzu.
+        $item.Tag = $_ # Speichert das Episoden-Objekt direkt im Item (WICHTIG für Sortierung!)
         [void]$listView.Items.Add($item) # Fügt den kompletten Eintrag zur ListView hinzu.
     }
+
+    # Initiale Sortierung nach Distanz (Spalte 3)
+    $sorter.Column = 3
+    $sorter.Order = [System.Windows.Forms.SortOrder]::Ascending
+    $listView.Sort()
+
     # Wählt den ersten Eintrag in der Liste standardmäßig aus, um die Bedienung zu beschleunigen.
     if ($listView.Items.Count -gt 0) { # Prüft, ob Einträge vorhanden sind.
         $listView.Items[0].Selected = $true # Markiert den ersten Eintrag.
@@ -397,36 +491,23 @@ function Show-EpisodeSelectionGui {
 #
     if ($result -eq [System.Windows.Forms.DialogResult]::OK) { # Prüft, ob "OK" geklickt wurde.
         if ($listView.SelectedItems.Count -gt 0) { # Prüft, ob ein Eintrag ausgewählt ist.
-            $selectedIndex = $listView.SelectedIndices[0] # Holt den Index des ausgewählten Eintrags.
-            return $PotentialMatches[$selectedIndex] # Gibt das ausgewählte Objekt zurück.
+            return $listView.SelectedItems[0].Tag # Gibt das im Tag gespeicherte Objekt zurück (korrekt auch nach Sortierung).
         }
     }
     return $null # Gibt null zurück, wenn abgebrochen wurde.
 }
 #
-# Extrahiert die Informationen zu einer bestimmten Episode aus dem HTML-Inhalt des Episodenführers.
-function Get-EpisodeInfo {
-    param(
-        [Parameter(Mandatory)]
-        [string]$GuideContent,
-
-        [Parameter(Mandatory)]
-        [int]$AbsoluteEpisodeNumber,
-
-        [Parameter(Mandatory)]
-        [string]$EpisodeTitleFromFile
+# Extrahiert alle Episoden aus dem HTML-Inhalt und gibt sie als strukturierte Liste zurück.
+function Parse-EpisodeGuide {
+    param (
+        [string]$GuideContent
     )
-#
-    # Wenn eine negative Episodennummer übergeben wird, bedeutet das, dass wir nur nach dem Titel suchen sollen.
-    $searchByTitleOnly = ($AbsoluteEpisodeNumber -lt 0) # Legt fest, ob nur nach Titel gesucht werden soll.
-#
     # Sucht alle HTML-Blöcke, die eine Episode repräsentieren (eingeschlossen in '<a>'-Tags mit 'role="row"').
     $episodePattern = '<a role="row".*?</a>' # Definiert das Regex-Muster für einen Episodenblock.
     $episodes = [regex]::Matches($GuideContent, $episodePattern, 'Singleline') # Findet alle Episodenblöcke im HTML.
-#
-    $potentialMatches = @() # Initialisiert ein Array für passende Episoden basierend auf der Nummer.
-    $allEpisodesForTitleSearch = @() # Initialisiert ein Array für alle Episoden, falls nur nach Titel gesucht wird.
-#
+    
+    $parsedList = @()
+    
     # Durchläuft jeden gefundenen Episodenblock.
     foreach ($ep in $episodes) { # Schleife über jeden gefundenen Episodenblock.
         $block = $ep.Value # Der HTML-Inhalt des aktuellen Blocks.
@@ -460,32 +541,52 @@ function Get-EpisodeInfo {
             $epAbs = [int]$matches[1] # Extrahiert die absolute Nummer.
         }
 #
-        # Wenn die absolute Nummer übereinstimmt, wird der Treffer zur Liste der potenziellen Übereinstimmungen hinzugefügt.
-        if (-not $searchByTitleOnly -and $epAbs -eq $AbsoluteEpisodeNumber) { # Prüft auf Übereinstimmung der absoluten Nummer.
-            $potentialMatches += [PSCustomObject]@{
-                Absolute = $epAbs # Speichert die absolute Nummer.
-                Staffel  = $st # Speichert die Staffelnummer.
-                Episode  = $epNum # Speichert die Episodennummer.
-                Code     = $epCode # Speichert den SxxExx-Code.
-                Titel    = $epTitle # Speichert den Titel.
-            }
-        }
-        # Wenn nur nach Titel gesucht wird, sammeln wir alle Episoden.
-        elseif ($searchByTitleOnly) { # Wenn nur nach Titel gesucht wird...
-            $allEpisodesForTitleSearch += [PSCustomObject]@{
-                Absolute = $epAbs # ...wird die Episode zur Liste aller Episoden hinzugefügt.
-                Staffel  = $st
-                Episode  = $epNum
-                Code     = $epCode
-                Titel    = $epTitle
-            }
+        $parsedList += [PSCustomObject]@{ 
+            Absolute = $epAbs # Speichert die absolute Nummer.
+            Staffel  = $st # Speichert die Staffelnummer.
+            Episode  = $epNum # Speichert die Episodennummer.
+            Code     = $epCode # Speichert den SxxExx-Code.
+            Titel    = $epTitle # Speichert den Titel.
         }
     }
+    return $parsedList
+}
+
+# Extrahiert die Informationen zu einer bestimmten Episode aus der vorab geparsten Episodenliste.
+function Get-EpisodeInfo {
+    param(
+        [Parameter(Mandatory)]
+        [array]$EpisodeList,
+
+        [Parameter(Mandatory=$false)]
+        [int]$AbsoluteEpisodeNumber = -1,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$EpisodeTitleFromFile,
+
+        [Parameter(Mandatory=$false)]
+        [string]$SeasonEpisodeCode,
+
+        [switch]$ShowAllMatches # NEU: Wenn gesetzt, werden alle Treffer angezeigt, nicht nur die besten 8.
+    )
 #
-    # Wenn nur nach Titel gesucht wird, werden alle Episoden als potenzielle Treffer verwendet.
-    if ($searchByTitleOnly) { # Wenn die Titelsuche aktiv ist...
-        $potentialMatches = $allEpisodesForTitleSearch # ...werden alle Episoden als potenzielle Treffer gesetzt.
-    } elseif ($potentialMatches.Count -eq 0) { # Wenn keine Treffer für die Nummer gefunden wurden...
+    # Wenn eine negative Episodennummer übergeben wird und kein Code vorhanden ist, bedeutet das, dass wir nur nach dem Titel suchen sollen.
+    $searchByTitleOnly = ($AbsoluteEpisodeNumber -lt 0 -and [string]::IsNullOrEmpty($SeasonEpisodeCode))
+    
+    $potentialMatches = @()
+    
+    if ($searchByTitleOnly) {
+        $potentialMatches = $EpisodeList
+    } else {
+        if ($AbsoluteEpisodeNumber -ge 0) {
+            $potentialMatches = $EpisodeList | Where-Object { $_.Absolute -eq $AbsoluteEpisodeNumber }
+        } elseif (-not [string]::IsNullOrEmpty($SeasonEpisodeCode)) {
+            $potentialMatches = $EpisodeList | Where-Object { $_.Code -eq $SeasonEpisodeCode }
+        }
+    }
+
+    if ($potentialMatches.Count -eq 0) { # Wenn keine Treffer für die Nummer gefunden wurden...
         return $null # Kein Treffer für die Episodennummer.
     }
 #
@@ -502,14 +603,31 @@ function Get-EpisodeInfo {
     }
     $bestMatch = $null # Initialisiert die Variable für den besten Treffer.
     $lowestDistance = [int]::MaxValue # Initialisiert die geringste Distanz mit einem sehr hohen Wert.
+    $matchesWithDistance = @() # Temporäre Liste für Ergebnisse inkl. berechneter Distanz.
 #
     foreach ($match in $potentialMatches) { # Schleife durch alle potenziellen Treffer.
+        # Überspringe leere Titel, um unnötige Berechnungen zu vermeiden.
+        if ([string]::IsNullOrWhiteSpace($match.Titel)) {
+            continue
+        }
+
         $distance = Get-LevenshteinDistance -s $EpisodeTitleFromFile -t $match.Titel # Berechnet die Titelähnlichkeit.
-        Write-Host "    - Vergleiche mit: '$($match.Titel)' (Distanz: $distance)" # Gibt den Vergleich aus.
+        # Write-Host "    - Vergleiche mit: '$($match.Titel)' (Distanz: $distance)" # Entfernt für Performance.
+        
+        # Speichert das Match und die Distanz, um späteres Neuberechnen beim Sortieren zu vermeiden.
+        $matchesWithDistance += [PSCustomObject]@{ 
+            Match    = $match
+            Distance = $distance
+        }
+
         if ($distance -lt $lowestDistance) { # Wenn die aktuelle Distanz geringer ist als die bisher geringste...
             $lowestDistance = $distance # ...wird sie als neue geringste Distanz gespeichert.
             $bestMatch = $match # ...und der aktuelle Treffer als bester Treffer gespeichert.
         }
+    }
+    
+    if ($bestMatch) {
+         Write-Host "    -> Bester Kandidat bisher: '$($bestMatch.Titel)' (Distanz: $lowestDistance)" -ForegroundColor Gray
     }
 #
     # Wenn die geringste Distanz 0 ist, haben wir einen perfekten Treffer.
@@ -521,11 +639,17 @@ function Get-EpisodeInfo {
         # Wenn kein perfekter Treffer gefunden wurde, den Benutzer auswählen lassen.
         Write-Host "  -> Kein exakter Treffer. Bereite Auswahl für den Benutzer vor." -ForegroundColor Yellow # Meldung für den Benutzer.
 #
-        # Wenn nur nach Titel gesucht wurde, die Liste auf die 6 besten Treffer reduzieren.
-        if ($searchByTitleOnly) { # Wenn nur nach Titel gesucht wurde...
-            Write-Host "  -> Reduziere die Liste auf die 8 besten Treffer." # ...wird die Liste gekürzt.
-            $sortedMatches = $potentialMatches | Sort-Object @{Expression={Get-LevenshteinDistance -s $_.Titel -t $EpisodeTitleFromFile}} # Sortiert die Treffer nach Titelähnlichkeit.
-            $potentialMatches = $sortedMatches | Select-Object -First 8 # Wählt die besten 8 Treffer aus.
+        # Wenn nur nach Titel gesucht wurde, die Liste auf die 8 besten Treffer reduzieren.
+        # Dies geschieht NICHT, wenn -ShowAllMatches gesetzt ist.
+        if ($searchByTitleOnly -and -not $ShowAllMatches) { # NEU: Prüfung auf ShowAllMatches
+            Write-Host "  -> Reduziere die Liste auf die 8 besten Treffer."
+            # Sortiert basierend auf der bereits berechneten Distanz (viel schneller).
+            $sortedMatches = $matchesWithDistance | Sort-Object Distance 
+            # Extrahiere die originalen Match-Objekte und nimmt die besten 8.
+            $potentialMatches = $sortedMatches | Select-Object -First 8 | ForEach-Object { $_.Match }
+        }
+        elseif ($ShowAllMatches) {
+            Write-Host "  -> Zeige ALLE Treffer an (erweiterte Suche)." -ForegroundColor Cyan
         }
 #
         return Show-EpisodeSelectionGui -PotentialMatches $potentialMatches -FileNameTitle $EpisodeTitleFromFile # Zeigt die GUI zur manuellen Auswahl an.
@@ -581,37 +705,149 @@ function Show-TagSelectionGui {
 
     return $null
 }
-#endregion
 
-#region Hauptlogik
-# ---------------------------------------------------------------------------------
-# Hauptlogik des Skripts
-# ---------------------------------------------------------------------------------
-#
-# Zeigt einen Dialog an, in dem der Benutzer den zu verarbeitenden Ordner auswählen kann.
-#$selectedPath = "Z:\TV\Das Dschungelbuch\" # Beispiel für eine feste Pfadangabe zum Testen.
-$folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog # Erstellt einen neuen Ordnerauswahldialog.
-if ($folderBrowser.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { # Zeigt den Dialog an und prüft, ob der Benutzer "OK" geklickt hat.
-    $selectedPath = $folderBrowser.SelectedPath # Speichert den ausgewählten Pfad.
-    Write-Host "Ausgewählter Ordner: $selectedPath" # Gibt den ausgewählten Pfad auf der Konsole aus.
-} else {
-    Write-Host "Abbruch. Das Programm wird beendet." # Gibt eine Abbruchmeldung aus.
-    exit # Beendet das Skript.
+# Speichert die Serieninformationen und Episodenliste in einer lokalen Textdatei.
+function Save-LocalSeriesInfo {
+    param (
+        [Parameter(Mandatory)]
+        [string]$Path,
+        [string]$SeriesName,
+        [string]$GuideUrl,
+        [array]$Episodes
+    )
+
+    try {
+        $content = @()
+        $content += "SeriesName=$SeriesName"
+        $content += "GuideUrl=$GuideUrl"
+        $content += "[EPISODES]"
+        
+        foreach ($ep in $Episodes) {
+            # Format: Code|Absolute|Staffel|Episode|Titel
+            # Wir verwenden | als Trennzeichen, da es in Dateinamen/Titeln selten vorkommt (und dort bereinigt wird).
+            $line = "{0}|{1}|{2}|{3}|{4}" -f $ep.Code, $ep.Absolute, $ep.Staffel, $ep.Episode, $ep.Titel
+            $content += $line
+        }
+        
+        $content | Out-File -FilePath $Path -Encoding utf8 -Force
+        Write-Host "Serieninformationen wurden in '$Path' gespeichert." -ForegroundColor Green
+    }
+    catch {
+        Write-Warning "Konnte Serieninformationen nicht speichern: $($_.Exception.Message)"
+    }
 }
-#
-# Initialisiert ein Hashtable als Cache, um wiederholte Suchen für dieselbe Serie zu vermeiden.
-$script:cachedSeries = @{
-    Name              = "" # Name der zuletzt gesuchten Serie.
-    EpisodeGuideUrl   = "" # URL des Episodenführers.
-    SelectedSeries    = $null # Das vom Benutzer ausgewählte Serienobjekt.
-    EpisodeGuideContent = "" # Der heruntergeladene HTML-Inhalt des Episodenführers.
+
+# Liest die lokalen Serieninformationen aus der Textdatei.
+function Get-LocalSeriesInfo {
+    param (
+        [string]$Path,
+        [switch]$IncludeUsed
+    )
+    
+    if (-not (Test-Path $Path)) { 
+        Write-Host "Keine lokale Serieninfo-Datei gefunden." -ForegroundColor DarkGray
+        return $null 
+    }
+    
+    Write-Host "Lese lokale Serieninformationen aus '$Path'..." -ForegroundColor Cyan
+    $content = Get-Content $Path -Encoding utf8
+    $seriesName = ""
+    $guideUrl = ""
+    $episodes = @()
+    $inEpisodesSection = $false
+    
+    foreach ($line in $content) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        
+        if ($line -match "^SeriesName=(.*)") { $seriesName = $matches[1].Trim(); continue }
+        if ($line -match "^GuideUrl=(.*)") { $guideUrl = $matches[1].Trim(); continue }
+        if ($line -eq "[EPISODES]") { $inEpisodesSection = $true; continue }
+        
+        if ($inEpisodesSection) {
+            $isUsed = $line.StartsWith("*")
+            $cleanLine = $line.TrimStart("*")
+            
+            if ($isUsed -and -not $IncludeUsed) { continue }
+            
+            $parts = $cleanLine -split '\|'
+            if ($parts.Count -ge 5) {
+                $episodes += [PSCustomObject]@{
+                    Code     = $parts[0]
+                    Absolute = if ($parts[1] -ne "") { [int]$parts[1] } else { $null }
+                    Staffel  = [int]$parts[2]
+                    Episode  = [int]$parts[3]
+                    Titel    = $parts[4]
+                    IsUsed   = $isUsed
+                }
+            }
+        }
+    }
+    
+    if ($seriesName -ne "") {
+        return [PSCustomObject]@{
+            SeriesName = $seriesName
+            GuideUrl   = $guideUrl
+            Episodes   = $episodes
+        }
+    }
+    return $null
 }
-#
-# Ruft alle .mkv-Dateien aus dem ausgewählten Ordner und seinen Unterordnern ab.
-$files = Get-ChildItem -Path $selectedPath -Recurse -Include *.mkv, *.mp4 # Sucht nach allen .mkv- und .mp4-Dateien im ausgewählten Ordner.
-#
-# Beginnt die Schleife zur Verarbeitung jeder einzelnen Datei.
-foreach ($file in $files) { # Startet die Schleife für jede gefundene Datei.
+
+# Markiert eine Episode in der lokalen Datei als verwendet (fügt * hinzu).
+function Update-LocalSeriesInfo {
+    param (
+        [string]$Path,
+        [string]$Code,
+        [string]$Title
+    )
+    
+    if (-not (Test-Path $Path)) { return }
+    
+    $content = Get-Content $Path -Encoding utf8
+    $newContent = @()
+    $inEpisodesSection = $false
+    
+    foreach ($line in $content) {
+        if ($line -eq "[EPISODES]") { 
+            $inEpisodesSection = $true
+            $newContent += $line
+            continue 
+        }
+        
+        if ($inEpisodesSection -and -not [string]::IsNullOrWhiteSpace($line)) {
+            # Zeile prüfen: [*]Code|Absolute|Staffel|Episode|Titel
+            $cleanLine = $line.TrimStart("*")
+            $parts = $cleanLine -split '\|'
+            
+            # Wir vergleichen Code und Titel, um sicherzugehen
+            if ($parts.Count -ge 5 -and $parts[0] -eq $Code -and $parts[4] -eq $Title) {
+                if (-not $line.StartsWith("*")) {
+                    $newContent += "*" + $line
+                } else {
+                    $newContent += $line
+                }
+            } else {
+                $newContent += $line
+            }
+        } else {
+            $newContent += $line
+        }
+    }
+    
+    $newContent | Out-File -FilePath $Path -Encoding utf8 -Force
+    Write-Host "Lokaler Status für '$Code' aktualisiert (als verwendet markiert)." -ForegroundColor DarkGray
+}
+
+# --- NEU: Gekapselte Funktion für die Verarbeitung einer einzelnen Datei ---
+function Process-File {
+    param(
+        [Parameter(Mandatory)]
+        $file,
+        
+        [switch]$ShowAllMatches
+    )
+
+    $detectedCode = $null # Variable für zusätzlich gefundenen Code initialisieren
     # Prüfen, ob die Datei bereits das Zielformat 'Serie - SxxExx - Titel.mkv' hat.
     # Eine Datei wird übersprungen, wenn sie das SxxExx-Format hat UND der Titel danach nicht nur aus Zahlen besteht.
     # Das stellt sicher, dass Dateien wie 'Serie - S01E01 - 123.mkv' trotzdem verarbeitet werden.
@@ -619,9 +855,12 @@ foreach ($file in $files) { # Startet die Schleife für jede gefundene Datei.
         $titlePart = $matches[1] # Extrahiert den Titelteil des Dateinamens.
         # Wenn der Titelteil NICHT nur aus Zahlen besteht, ist die Datei fertig.
         if ($titlePart -notmatch '^\d+$') { # Prüft, ob der Titel nicht nur aus Zahlen besteht.
-        Write-Host "Datei '$($file.Name)' hat bereits das korrekte Format und wird übersprungen." -ForegroundColor DarkGray # Gibt eine Meldung aus.
-        continue # Springt zur nächsten Datei in der Schleife.
-    }
+            Write-Host "Datei '$($file.Name)' hat bereits das korrekte Format." -ForegroundColor DarkGray
+            $msgResult = [System.Windows.Forms.MessageBox]::Show("Datei '$($file.Name)' scheint bereits korrekt zu sein. Trotzdem bereinigen?", "Datei überspringen?", "YesNo", "Question")
+            if ($msgResult -eq "No") {
+                return $true # Erfolg, da absichtlich übersprungen
+            }
+        }
     }
 #
     Write-Host "------------------------------------------------------------" # Trennlinie für die Übersichtlichkeit.
@@ -629,7 +868,8 @@ foreach ($file in $files) { # Startet die Schleife für jede gefundene Datei.
 #
     $baseName = $file.BaseName # Holt den Dateinamen ohne die Dateiendung.
     # 4. Entfernt gängige Szene-Tags. Die Suche ist case-insensitive.
-    $baseNameOhneTags = $baseName -replace "\b($sceneTags)\b", '' # Entfernt alle definierten Tags aus dem Dateinamen.
+    # Zugriff auf $global:sceneTags oder $script:sceneTags erforderlich (hier durch Variablen-Scope oft automatisch verfügbar, zur Sicherheit direkt verwendet)
+    $baseNameOhneTags = $baseName -replace "\b($script:sceneTags)\b", '' # Entfernt alle definierten Tags aus dem Dateinamen.
 #
     # 5. Entfernt den Gruppennamen (Punkt 6), der oft mit einem Bindestrich am Ende steht.
     $baseNameOhneGruppe = $baseNameOhneTags -replace '-\w+$', '' # Entfernt den Gruppennamen am Ende.
@@ -638,12 +878,16 @@ foreach ($file in $files) { # Startet die Schleife für jede gefundene Datei.
     # 1. Normalisiert die Trennzeichen um das SxxExx-Muster herum, um eine saubere Struktur zu schaffen.
     # Dies behandelt Fälle wie "SerieS01E01Titel" oder "Serie-S01E01-Titel".
     $baseNameMitTrenner = $baseNameOhneGruppe -replace '(\S)(S\d{2}E\d{2})', '$1 - $2' -replace '(S\d{2}E\d{2})(\S)', '$1 - $2' # Fügt Trennzeichen um SxxExx ein.
+    
+    # Fix für Seriennamen wie "PUR+", wo das Plus direkt am Bindestrich kleben kann ("PUR+-Titel").
+    # Wir fügen ein Leerzeichen ein, damit der Trenner als " - " erkannt wird oder zumindest sauber getrennt ist.
+    $baseNameMitTrenner = $baseNameMitTrenner -replace '\+-', '+ - ' 
 #
     # 2. Ersetzt alle restlichen Punkte und Unterstriche durch Leerzeichen.
     $baseNameOhnePunkte = $baseNameMitTrenner -replace '[\._]', ' ' # Ersetzt Punkte und Unterstriche durch Leerzeichen.
 #
-    if ($baseNameOhnePunkte -match ' - \d{8,12}$') { # Prüft, ob am Ende eine lange numerische ID steht.
-        $baseNameID = $baseNameOhnePunkte -replace ' - \d{8,12}$', '' # Entfernt diese ID.
+    if ($baseNameOhnePunkte -match '\s*-\s*\d{8,12}$') { # Prüft, ob am Ende eine lange numerische ID steht (mit oder ohne Leerzeichen).
+        $baseNameID = $baseNameOhnePunkte -replace '\s*-\s*\d{8,12}$', '' # Entfernt diese ID.
         Write-Host "Numerische ID am Ende des Dateinamens entfernt." -ForegroundColor Magenta # Gibt eine Meldung aus.
         $baseNameOhnePunkte = $baseNameID # Aktualisiert den Dateinamen.
     }
@@ -652,6 +896,17 @@ foreach ($file in $files) { # Startet die Schleife für jede gefundene Datei.
     # Teilt den normalisierten Namen am Trennzeichen ' - ' auf, um die einzelnen Teile zu erhalten.
     $fileNameParts = $baseNameOhnePunkte -split ' - ' # Teilt den Namen in seine Bestandteile auf.
 
+    # Fallback: Wenn kein Standard-Trenner ' - ' gefunden wurde, versuchen wir am ersten Bindestrich zu trennen, 
+    # falls der Name lang genug ist und keine SxxExx-Struktur hat.
+    if ($fileNameParts.Count -lt 2 -and $baseNameOhnePunkte -match '^[^-]+-.+$' -and $baseNameOhnePunkte -notmatch 'S\d{2}E\d{2}') {
+        $firstDashIndex = $baseNameOhnePunkte.IndexOf('-')
+        $seriesPart = $baseNameOhnePunkte.Substring(0, $firstDashIndex).Trim()
+        $restPart = $baseNameOhnePunkte.Substring($firstDashIndex + 1).Trim()
+        $fileNameParts = @($seriesPart, $restPart)
+        $baseNameOhnePunkte = "$seriesPart - $restPart"
+        Write-Host "Kein Standard-Trenner gefunden. Trenne am ersten Bindestrich: '$seriesPart' - '$restPart'" -ForegroundColor Magenta
+    }
+#
     # 3. Ersetzt Bindestriche, die als Trennzeichen dienen (mit Leerzeichen drumherum), durch den Standard-Trenner " - ".
     # Bindestriche innerhalb von Wörtern (z.B. "Dreifach-Date") bleiben unberührt.
     $baseNameFinal = $fileNameParts -replace '\s+-\s+', ' - ' # Normalisiert die Trennzeichen.
@@ -661,31 +916,52 @@ foreach ($file in $files) { # Startet die Schleife für jede gefundene Datei.
     $baseNameFinal = $baseNameFinal.Trim()  # Entfernt führende und nachfolgende Leerzeichen.
     $baseNameFinal = $baseNameFinal | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } # Entfernt leere Teile.
 #
+    
+    # Ermittle den potenziellen Seriennamen vorab, um zu prüfen, ob ein Wechsel stattgefunden hat.
+    # Dies ist wichtig, damit die Tag-GUI auch bei der allerersten Datei einer neuen Serie korrekt angezeigt wird.
+    if ($fileNameParts.Count -ge 1) {
+        $potentialSeriesName = $fileNameParts[0].Trim()
+        # Wende die gleiche Korrekturlogik für "Serie - Serie" an wie später im Skript.
+        $potParts = $potentialSeriesName -split '-'
+        if ($potParts.Count -eq 2 -and $potParts[0].Trim() -eq $potParts[1].Trim()) {
+             $potentialSeriesName = $potParts[0].Trim()
+        }
+
+        # Wenn sich der Serienname geändert hat, setzen wir den Tag-Check zurück.
+        if ($script:cachedSeries.Name -ne $potentialSeriesName) {
+            $script:cachedSeries.HasCheckedTags = $false
+        }
+    }
 
 
     # --- NEU: GUI zur Auswahl zusätzlicher Tags ---
-    $tagsToRemove = Show-TagSelectionGui -FileNameParts $baseNameFinal # Zeigt die GUI zur Tag-Auswahl an.
-    if ($null -ne $tagsToRemove -and $tagsToRemove.Count -gt 0) {
-        Write-Host "Folgende neue Tags werden entfernt und gespeichert: $($tagsToRemove -join ', ')" -ForegroundColor Magenta
+    # Führe die Tag-Auswahl nur einmal pro Serie durch (oder beim ersten Start).
+    if (-not $script:cachedSeries.HasCheckedTags) {
+        $tagsToRemove = Show-TagSelectionGui -FileNameParts $baseNameFinal # Zeigt die GUI zur Tag-Auswahl an.
+        $script:cachedSeries.HasCheckedTags = $true # Merken, dass die Prüfung erfolgt ist.
         
-        # Neue Tags zur Datei hinzufügen (ohne Duplikate)
-        $existingCustomTags = if (Test-Path $customTagsFile) { Get-Content $customTagsFile } else { @() }
-        $allCustomTags = ($existingCustomTags + $tagsToRemove) | Select-Object -Unique
-        $allCustomTags | Out-File $customTagsFile -Encoding utf8
+        if ($null -ne $tagsToRemove -and $tagsToRemove.Count -gt 0) {
+            Write-Host "Folgende neue Tags werden entfernt und gespeichert: $($tagsToRemove -join ', ')" -ForegroundColor Magenta
+            
+            # Neue Tags zur Datei hinzufügen (ohne Duplikate)
+            $existingCustomTags = if (Test-Path $script:customTagsFile) { Get-Content $script:customTagsFile } else { @() }
+            $allCustomTags = ($existingCustomTags + $tagsToRemove) | Select-Object -Unique
+            $allCustomTags | Out-File $script:customTagsFile -Encoding utf8
 
-        # Neue Tags sofort zur aktuellen Session hinzufügen
-        $global:sceneTags += '|' + ($tagsToRemove -join '|')
+            # Neue Tags sofort zur aktuellen Session hinzufügen
+            $script:sceneTags += '|' + ($tagsToRemove -join '|')
 
-        # Dateinamen-Teile neu erstellen, ohne die ausgewählten Tags
-        $fileNameParts = $fileNameParts | Where-Object { $_ -notin $tagsToRemove }
+            # Dateinamen-Teile neu erstellen, ohne die ausgewählten Tags
+            $fileNameParts = $fileNameParts | Where-Object { $_ -notin $tagsToRemove }
 
-        # Den bereinigten Namen für die weitere Verarbeitung neu zusammensetzen
-        $baseNameFinal = $fileNameParts -join ' - '
+            # Den bereinigten Namen für die weitere Verarbeitung neu zusammensetzen
+            $baseNameFinal = $fileNameParts -join ' - '
+        }
     }
 #
     if ($fileNameParts.Count -lt 2) { # Prüft, ob der Name mindestens zwei Teile hat.
         Write-Warning "Dateiname '$($file.Name)' (nach Normalisierung: '$baseNameFinal') entspricht nicht dem Format 'Serie - Folge - Titel' und wird übersprungen." # Gibt eine Warnung aus.
-        continue # Springt zur nächsten Datei.
+        return $true # Überspringen, aber nicht als Fehler werten (kein Retry)
     }
 #
     # Extrahiert den Seriennamen und korrigiert ihn, falls er durch die Aufteilung verdoppelt wurde (z.B. "Serie - Serie").
@@ -709,11 +985,11 @@ foreach ($file in $files) { # Startet die Schleife für jede gefundene Datei.
         Write-Host "Datei '$($file.Name)' scheint bereits im korrekten SxxExx-Format zu sein und wird übersprungen." -ForegroundColor Green # ...wird die Datei übersprungen.
         try {
             Rename-Item -Path $file.FullName -NewName "$baseNameFinal.$($file.Extension)" -ErrorAction Stop # Benennt die Datei um.
-            }
+        }
         catch {
             Write-Error "Fehler beim Umbenennen der Datei: $($_.Exception.Message)" # Gibt einen Fehler aus, falls das Umbenennen fehlschlägt.
         }
-        continue # Nächste Datei.
+        return $true
     } else {
         # Der Rest des Namens ist der Titel.
         $episodeTitleFromFile  = $fileNameParts[2..($fileNameParts.Count - 1)] -join ' - ' # Ansonsten ist der Rest der Titel.
@@ -726,6 +1002,33 @@ foreach ($file in $files) { # Startet die Schleife für jede gefundene Datei.
         Write-Host "Keine Folgennummer im Namen gefunden. Suche wird nur nach Titel durchgeführt." -ForegroundColor Magenta # ...wird eine Meldung ausgegeben.
         $episodeTitleFromFile = ($fileNameParts[1..($fileNameParts.Count - 1)] -join ' - ').Trim() # Der gesamte Rest wird zum Titel.
         $absoluteEpisodeNumber = -1 # Setzt die Nummer auf -1, um die Titelsuche zu signalisieren.
+
+        # --- NEU: Erweiterte Analyse des Titels ---
+        
+        # 1. Prüfen auf versteckten Code wie "S04 E13" (entstanden aus S04_E13 durch Normalisierung)
+        if ($episodeTitleFromFile -match 'S(\d+)\s*E(\d+)') {
+            $tempCode = "S{0:00}E{1:00}" -f [int]$matches[1], [int]$matches[2]
+            
+            # Abfrage nur beim ersten Mal, wenn noch keine Entscheidung getroffen wurde
+            if ($null -eq $script:approvedHiddenCodePattern) {
+                $msgResult = [System.Windows.Forms.MessageBox]::Show("Im Titel wurde ein versteckter Episodencode '$tempCode' gefunden.`nSoll dieser für die Identifikation verwendet werden?`n`n(Diese Entscheidung wird für den aktuellen Durchlauf gespeichert)", "Versteckten Code gefunden", "YesNo", "Question")
+                $script:approvedHiddenCodePattern = ($msgResult -eq "Yes")
+            }
+
+            if ($script:approvedHiddenCodePattern) {
+                $detectedCode = $tempCode
+                Write-Host "Versteckten Episodencode '$detectedCode' im Titel gefunden." -ForegroundColor Cyan
+            }
+        }
+
+        # 2. Prüfen auf Bindestrich ohne Leerzeichen (z.B. "Untertitel-Episodentitel")
+        # Wir splitten nur, wenn der Titel dadurch nicht extrem kurz wird (Schutz vor "X-Men")
+        if ($episodeTitleFromFile -match '^.+-.+$') {
+            $parts = $episodeTitleFromFile -split '-', 2
+            $potentialTitle = $parts[1].Trim()
+            Write-Host "Titel enthält Bindestrich. Trenne ab: '$($parts[0].Trim())' -> Verwende: '$potentialTitle'" -ForegroundColor Magenta
+            $episodeTitleFromFile = $potentialTitle
+        }
     }
 #
     # Bereinigt den Titel, um sicherzustellen, dass keine SxxExx-Muster oder führende Trennzeichen mehr enthalten sind, bevor die Distanz berechnet wird.
@@ -737,40 +1040,65 @@ foreach ($file in $files) { # Startet die Schleife für jede gefundene Datei.
     if ($script:cachedSeries.Name -ne $seriesNameFromFile) { # Wenn sich der Serienname geändert hat...
         # Cache für die neue Serie zurücksetzen
         # Wenn es eine neue Serie ist, wird eine neue Online-Suche gestartet.
-        Write-Host "Neue Serie erkannt: '$seriesNameFromFile'. Suche nach Episodenführer..." -ForegroundColor Yellow # ...wird eine neue Suche gestartet.
-#
-        $searchResults = Invoke-SeriesSearch -SeriesName $seriesNameFromFile -regex $regex # Führt die Online-Suche durch.
-#
-        # --- Start: Angepasste Verarbeitung der Suchergebnisse ---
-        if ($null -eq $searchResults -or $searchResults.Count -eq 0) { # Wenn keine Ergebnisse gefunden wurden...
-            Write-Warning "Keine Suchergebnisse für '$seriesNameFromFile' gefunden." # ...wird eine Warnung ausgegeben.
-            continue # ...und die nächste Datei verarbeitet.
+        Write-Host "Neue Serie erkannt: '$seriesNameFromFile'." -ForegroundColor Yellow
+        
+        # --- NEU: Zuerst lokal suchen ---
+        $serienInfoPath = Join-Path $script:selectedPath "Serieninfo.txt"
+        $localInfo = $null
+        
+        if (Test-Path $serienInfoPath) {
+            # Prüfen, ob wir im 2. Durchlauf sind und Used includen sollen
+            $includeUsed = $script:includeUsedEpisodes -eq $true
+            $localInfo = Get-LocalSeriesInfo -Path $serienInfoPath -IncludeUsed:$includeUsed
         }
-#
-        # Fall 1: Direkter Treffer wurde von Invoke-SeriesSearch zurückgegeben
-        if ($searchResults.PSObject.Properties['IsDirectHit'] -and $searchResults.IsDirectHit) { # Prüft, ob es ein direkter Treffer war.
-            Write-Host "Direkter Treffer wird verarbeitet." -ForegroundColor Cyan # Meldung für den Benutzer.
-            $script:cachedSeries.Name = $seriesNameFromFile # Speichert den Seriennamen im Cache.
-            $script:cachedSeries.SelectedSeries = $searchResults.SelectedSeries # Speichert das Serienobjekt im Cache.
-            $script:cachedSeries.EpisodeGuideUrl = $searchResults.EpisodeGuideUrl # Speichert die Episodenführer-URL im Cache.
-            $script:cachedSeries.EpisodeGuideContent = "" # Leert den Inhalts-Cache, da er neu geladen werden muss.
-        }
-        # Fall 2: Liste von Suchergebnissen wurde zurückgegeben
+
+        if ($localInfo) {
+            Write-Host "Verwende lokale Informationen aus Serieninfo.txt." -ForegroundColor Green
+            $script:cachedSeries.Name = $seriesNameFromFile
+            $script:cachedSeries.SelectedSeries = [pscustomobject]@{ Title = $localInfo.SeriesName; Url = $localInfo.GuideUrl }
+            $script:cachedSeries.EpisodeGuideUrl = $localInfo.GuideUrl
+            $script:cachedSeries.ParsedEpisodes = $localInfo.Episodes
+            # Content brauchen wir nicht laden, da wir die Episoden schon haben
+            $script:cachedSeries.EpisodeGuideContent = "LOADED_FROM_FILE" 
+        } 
         else {
-            if ($searchResults.Count -eq 1) { # Wenn es genau ein Suchergebnis gibt...
-                Write-Host "Genau ein Suchergebnis gefunden, wird automatisch verwendet." # ...wird dieses automatisch verwendet.
-                $script:cachedSeries.SelectedSeries = $searchResults[0] # Speichert das Ergebnis im Cache.
-            } else {
-                # Bei mehreren Ergebnissen wird die GUI zur Auswahl angezeigt.
-                $script:cachedSeries.SelectedSeries = Show-SeriesSelectionGui -SearchResults $searchResults -SeriesName $seriesNameFromFile # Zeigt die Auswahl-GUI an.
+            Write-Host "Suche online nach Episodenführer..." -ForegroundColor Yellow
+            # Zugriff auf globalen Regex
+            $searchResults = Invoke-SeriesSearch -SeriesName $seriesNameFromFile # Führt die Online-Suche durch.
+    #
+            # --- Start: Angepasste Verarbeitung der Suchergebnisse ---
+            if ($null -eq $searchResults -or $searchResults.Count -eq 0) { # Wenn keine Ergebnisse gefunden wurden...
+                Write-Warning "Keine Suchergebnisse für '$seriesNameFromFile' gefunden."
+                return $false # Retry? Wenn keine Serie gefunden wird, hilft Retry meist nicht, aber konsistent mit "failed".
             }
-#
-            if ($null -ne $script:cachedSeries.SelectedSeries) { # Wenn eine Serie ausgewählt wurde...
-                $guideUrl = Get-EpisodeGuideUrl -SeriesUrl $script:cachedSeries.SelectedSeries.Url # ...wird die Episodenführer-URL gesucht.
-                if ($guideUrl) { # Wenn eine URL gefunden wurde...
-                    $script:cachedSeries.Name = $seriesNameFromFile # ...wird der Cache mit den neuen Informationen aktualisiert.
-                    $script:cachedSeries.EpisodeGuideUrl = $guideUrl
-                    $script:cachedSeries.EpisodeGuideContent = ""
+    #
+            # Fall 1: Direkter Treffer wurde von Invoke-SeriesSearch zurückgegeben
+            if ($searchResults.PSObject.Properties['IsDirectHit'] -and $searchResults.IsDirectHit) { # Prüft, ob es ein direkter Treffer war.
+                Write-Host "Direkter Treffer wird verarbeitet." -ForegroundColor Cyan # Meldung für den Benutzer.
+                $script:cachedSeries.Name = $seriesNameFromFile # Speichert den Seriennamen im Cache.
+                $script:cachedSeries.SelectedSeries = $searchResults.SelectedSeries # Speichert das Serienobjekt im Cache.
+                $script:cachedSeries.EpisodeGuideUrl = $searchResults.EpisodeGuideUrl # Speichert die Episodenführer-URL im Cache.
+                $script:cachedSeries.EpisodeGuideContent = "" # Leert den Inhalts-Cache, da er neu geladen werden muss.
+                $script:cachedSeries.ParsedEpisodes = $null
+            }
+            # Fall 2: Liste von Suchergebnissen wurde zurückgegeben
+            else {
+                if ($searchResults.Count -eq 1) { # Wenn es genau ein Suchergebnis gibt...
+                    Write-Host "Genau ein Suchergebnis gefunden, wird automatisch verwendet."
+                    $script:cachedSeries.SelectedSeries = $searchResults[0] # Speichert das Ergebnis im Cache.
+                } else {
+                    # Bei mehreren Ergebnissen wird die GUI zur Auswahl angezeigt.
+                    $script:cachedSeries.SelectedSeries = Show-SeriesSelectionGui -SearchResults $searchResults -SeriesName $seriesNameFromFile # Zeigt die Auswahl-GUI an.
+                }
+    #
+                if ($null -ne $script:cachedSeries.SelectedSeries) { # Wenn eine Serie ausgewählt wurde...
+                    $guideUrl = Get-EpisodeGuideUrl -SeriesUrl $script:cachedSeries.SelectedSeries.Url # ...wird die Episodenführer-URL gesucht.
+                    if ($guideUrl) { # Wenn eine URL gefunden wurde...
+                        $script:cachedSeries.Name = $seriesNameFromFile # ...wird der Cache mit den neuen Informationen aktualisiert.
+                        $script:cachedSeries.EpisodeGuideUrl = $guideUrl
+                        $script:cachedSeries.EpisodeGuideContent = ""
+                        $script:cachedSeries.ParsedEpisodes = $null
+                    }
                 }
             }
         }
@@ -790,23 +1118,35 @@ foreach ($file in $files) { # Startet die Schleife für jede gefundene Datei.
             }
             catch {
                 Write-Error "Fehler beim Herunterladen des Episodenführers: $($_.Exception.Message)" # Gibt einen Fehler aus, falls der Download fehlschlägt.
-                continue # Springt zur nächsten Datei.
+                return $false
             }
         }
+        
+        # Parsen des Inhalts, falls noch nicht geschehen
+        if ($null -eq $script:cachedSeries.ParsedEpisodes) {
+             Write-Host "Parse Episodenguide einmalig für den Cache..." -ForegroundColor Cyan
+             $script:cachedSeries.ParsedEpisodes = Parse-EpisodeGuide -GuideContent $script:cachedSeries.EpisodeGuideContent
+             
+             # --- NEU: Nach dem Parsen in Datei speichern ---
+             $serienInfoPath = Join-Path $script:selectedPath "Serieninfo.txt"
+             Save-LocalSeriesInfo -Path $serienInfoPath -SeriesName $script:cachedSeries.SelectedSeries.Title -GuideUrl $script:cachedSeries.EpisodeGuideUrl -Episodes $script:cachedSeries.ParsedEpisodes
+        }
+
         # Ruft die spezifischen Informationen für die aktuelle Episode ab.
-        $episodeInfo = Get-EpisodeInfo -GuideContent $script:cachedSeries.EpisodeGuideContent -AbsoluteEpisodeNumber $absoluteEpisodeNumber -EpisodeTitleFromFile $episodeTitleFromFile # Sucht die Episodeninformationen.
+        # NEU: Übergabe von ShowAllMatches
+        $episodeInfo = Get-EpisodeInfo -EpisodeList $script:cachedSeries.ParsedEpisodes -AbsoluteEpisodeNumber $absoluteEpisodeNumber -EpisodeTitleFromFile $episodeTitleFromFile -SeasonEpisodeCode $detectedCode -ShowAllMatches:$ShowAllMatches 
     }
     else {
-        Write-Warning "Kein Episodenführer für diese Serie verfügbar. Datei wird übersprungen." -ForegroundColor Red # Gibt eine Warnung aus, wenn kein Episodenführer gefunden wurde.
-        continue # Springt zur nächsten Datei.
+        Write-Host "Kein Episodenführer für diese Serie verfügbar. Datei wird übersprungen." -ForegroundColor Red # Gibt eine Warnung aus, wenn kein Episodenführer gefunden wurde.
+        return $false
     }
 #
     # Wenn Episodeninformationen gefunden wurden, wird der neue Dateiname erstellt.
     if ($null -ne $episodeInfo) { # Wenn Episodeninformationen gefunden wurden...
         # Prüfen, ob ein gültiger Episodencode (SxxExx) gefunden wurde.
         if ([string]::IsNullOrEmpty($episodeInfo.Code)) { # ...aber kein SxxExx-Code...
-            Write-Warning "Konnte keinen SxxExx-Code für die gefundene Episode '$($episodeInfo.Titel)' erstellen. Datei wird übersprungen." # ...wird eine Warnung ausgegeben.
-            continue # ...und die Datei übersprungen.
+            Write-Warning "Konnte keinen SxxExx-Code für die gefundene Episode '$($episodeInfo.Titel)' erstellen. Datei wird übersprungen."
+            return $false
         }
 #
         # Prüft, ob der online gefundene Serienname vom Namen in der Datei abweicht, und verwendet den präziseren Online-Namen.
@@ -823,15 +1163,104 @@ foreach ($file in $files) { # Startet die Schleife für jede gefundene Datei.
         Write-Host "Neuer Dateiname: $newName" -ForegroundColor Green # Gibt den neuen Dateinamen aus.
     }
     else {
-        Write-Warning "Keine Episoden-Information für Folge '$absoluteEpisodeNumber' von '$seriesNameFromFile' gefunden. Datei wird übersprungen." # Gibt eine Warnung aus, wenn keine Episode gefunden wurde.
-        continue # Springt zur nächsten Datei.
+        Write-Warning "Keine Episoden-Information für Folge '$absoluteEpisodeNumber' von '$seriesNameFromFile' gefunden (oder abgebrochen). Datei wird zur Nachbearbeitung vorgemerkt."
+        return $false # Signalisiert: Nicht erfolgreich / Abbruch
     }
     # Versucht, die Datei umzubenennen.
     try {
         Rename-Item -Path $file.FullName -NewName $newName -ErrorAction Stop # Benennt die Datei um.
+        
+        # --- NEU: Entferne die verwendete Episode aus der Liste, damit sie nicht doppelt vergeben wird ---
+        if ($null -ne $episodeInfo -and $null -ne $script:cachedSeries.ParsedEpisodes) {
+            $script:cachedSeries.ParsedEpisodes = $script:cachedSeries.ParsedEpisodes | Where-Object { 
+                $_.Code -ne $episodeInfo.Code -or $_.Titel -ne $episodeInfo.Titel -or $_.Absolute -ne $episodeInfo.Absolute 
+            }
+            Write-Host "Episode '$($episodeInfo.Code) - $($episodeInfo.Titel)' aus der Liste der verfügbaren Episoden entfernt." -ForegroundColor Gray
+            
+            # --- NEU: In Datei als verwendet markieren ---
+            $serienInfoPath = Join-Path $script:selectedPath "Serieninfo.txt"
+            Update-LocalSeriesInfo -Path $serienInfoPath -Code $episodeInfo.Code -Title $episodeInfo.Titel
+        }
+        return $true # Erfolg
     }
     catch {
         Write-Error "Fehler beim Umbenennen der Datei: $($_.Exception.Message)" # Gibt einen Fehler aus, falls das Umbenennen fehlschlägt.
+        return $false # Fehler beim Umbenennen -> Retry?
     }
 }
+#endregion
+
+#region Hauptlogik
+# ---------------------------------------------------------------------------------
+# Hauptlogik des Skripts
+# ---------------------------------------------------------------------------------
+#
+# Zeigt einen Dialog an, in dem der Benutzer den zu verarbeitenden Ordner auswählen kann.
+#$selectedPath = "Z:\TV\Das Dschungelbuch\" # Beispiel für eine feste Pfadangabe zum Testen.
+$folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog # Erstellt einen neuen Ordnerauswahldialog.
+if ($folderBrowser.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { # Zeigt den Dialog an und prüft, ob der Benutzer "OK" geklickt hat.
+    $script:selectedPath = $folderBrowser.SelectedPath # Speichert den ausgewählten Pfad.
+    Write-Host "Ausgewählter Ordner: $script:selectedPath" # Gibt den ausgewählten Pfad auf der Konsole aus.
+} else {
+    Write-Host "Abbruch. Das Programm wird beendet."
+    exit # Beendet das Skript.
+}
+#
+# Initialisiert ein Hashtable als Cache, um wiederholte Suchen für dieselbe Serie zu vermeiden.
+$script:cachedSeries = @{
+    Name              = "" # Name der zuletzt gesuchten Serie.
+    EpisodeGuideUrl   = "" # URL des Episodenführers.
+    SelectedSeries    = $null # Das vom Benutzer ausgewählte Serienobjekt.
+    EpisodeGuideContent = "" # Der heruntergeladene HTML-Inhalt des Episodenführers.
+    ParsedEpisodes    = $null # Die bereits geparste Liste aller Episoden.
+    HasCheckedTags    = $false # Gibt an, ob die Tag-Auswahl für diese Serie bereits durchgeführt wurde.
+}
+#
+$script:includeUsedEpisodes = $false # Standardmäßig keine verwendeten Episoden laden
+# Ruft alle .mkv-Dateien aus dem ausgewählten Ordner und seinen Unterordnern ab.
+$files = Get-ChildItem -Path $script:selectedPath -Recurse -Include *.mkv, *.mp4 # Sucht nach allen .mkv- und .mp4-Dateien im ausgewählten Ordner.
+
+$retryFiles = @()
+
+#
+# Beginnt die Schleife zur Verarbeitung jeder einzelnen Datei (1. Durchlauf).
+Write-Host "=== Start 1. Durchlauf (Top 8 Treffer) ===" -ForegroundColor Cyan
+foreach ($file in $files) { # Startet die Schleife für jede gefundene Datei.
+    $success = Process-File -File $file -ShowAllMatches:$false
+    
+    if (-not $success) {
+        $retryFiles += $file
+    }
+}
+
+# 2. Durchlauf für abgebrochene/fehlgeschlagene Dateien mit erweiterter Suche
+if ($retryFiles.Count -gt 0) {
+    Write-Host "`n=== Start 2. Durchlauf (Alle Treffer anzeigen) ===" -ForegroundColor Cyan
+    Write-Host "Es werden $($retryFiles.Count) Dateien erneut verarbeitet..." -ForegroundColor Yellow
+    
+    # --- NEU: Popup Abfrage ---
+    $msgResult = [System.Windows.Forms.MessageBox]::Show("Sollen im zweiten Durchlauf auch bereits als 'gefunden' markierte Episoden (aus Serieninfo.txt) wiederverwendet werden?", "Erweiterte Suche", "YesNo", "Question")
+    if ($msgResult -eq "Yes") {
+        $script:includeUsedEpisodes = $true
+        # Cache leeren, damit beim nächsten Process-File die Datei neu geladen wird (mit * Einträgen)
+        $script:cachedSeries.Name = "" 
+        $script:cachedSeries.ParsedEpisodes = $null
+        Write-Host "Bereits verwendete Episoden werden nun einbezogen." -ForegroundColor Magenta
+    }
+    
+    # Warte kurz, damit der Benutzer die Meldung sieht
+    Start-Sleep -Seconds 2
+    
+    foreach ($file in $retryFiles) {
+        # Prüfen, ob die Datei noch existiert (könnte manuell geändert worden sein)
+        if (Test-Path $file.FullName) {
+            # Erneuter Aufruf mit ShowAllMatches = $true
+            # Refresh File-Objekt um sicherzustellen, dass Pfad etc. aktuell sind
+            $currentFile = Get-Item $file.FullName
+            Process-File -File $currentFile -ShowAllMatches:$true
+        }
+    }
+}
+
+Write-Host "`nVerarbeitung abgeschlossen." -ForegroundColor Green
 #endregion

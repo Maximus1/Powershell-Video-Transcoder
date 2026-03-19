@@ -1,8 +1,9 @@
 #region Konfiguration
 # Pfad zur FFmpeg-Anwendung. Dieser muss korrekt gesetzt sein, damit das Skript funktioniert.
-$ffmpegPath = "F:\media-autobuild_suite-master1\local64\bin-video\ffmpeg.exe"
+$ffmpegPath = "F:\media-autobuild_suite-master\local64\bin-video\ffmpeg.exe"
 # Pfad zur mkvextract-Anwendung aus dem MKVToolNix-Paket.
 $mkvextractPath = "C:\Program Files\MKVToolNix\mkvextract.exe"
+# Pfad zur mkclean-Anwendung.
 
 # Ziel-Lautheit in LUFS fuer die Audionormalisierung (z.B. -18 fuer eine konsistente Lautstaerke).
 $targetLoudness = -18
@@ -17,12 +18,12 @@ $useHardwareAccel = $true # Setze auf $true, um Hardwarebeschleunigung zu verwen
 # Qualitaetsvorgaben fuer die Encoder.
 $amd_quality = "quality" # AMD Preset fuer hohe Qualitaet.
 $Nvidia_quality = "hq" # NVIDIA Preset fuer hohe Qualitaet.
+# Encoder-Preset beeinflusst die Kodierungsgeschwindigkeit vs. Kompression (z.B. 'medium', 'slow').
 $encoderPreset = 'medium' # Standard-Preset fuer libx265.
 # CRF-Wert (Constant Rate Factor) fuer Filme. Niedrigere Werte bedeuten hoehere Qualitaet.
 $crfTargetm = 18 # CRF fuer Filme
 # CRF-Wert fuer Serien.
 $crfTargets = 20 # Etwas hoeherer CRF fuer Serien zur besseren Kompression.
-# Encoder-Preset beeinflusst die Kodierungsgeschwindigkeit vs. Kompression (z.B. 'medium', 'slow').
 # Der Ziel-Videocodec fuer die Transkodierung.
 $targetVideoCodec = 'HEVC' # Alle Videos werden in HEVC (H.265) kodiert.
 
@@ -40,9 +41,7 @@ $qualitaetSerie = "hoch" # Qualitaetsstufe fuer Serien
 
 
 #endregion
-
 #region Hilfsfunktionen
-
 function Get-HardwareEncoder {
     # Bestimmt den verfuegbaren Hardware-Encoder basierend auf System-GPU und FFmpeg-Unterstuetzung.
     param(
@@ -313,27 +312,51 @@ function Get-ColorAndHDRInfo {
 function Get-AudioInfo {
     # Extrahiert Audio-Metadaten (Kanalanzahl und Codec) aus der FFmpeg-Ausgabe.
     param ([string]$Output)
-    $info = @{}
-    # Extrahiert Audio-Metadaten (Kanalanzahl und Codec) aus der FFmpeg-Ausgabe.
-
-    # Sucht nach der Kanalanzahl in der Form "X channels".
-    if ($Output -match "Audio:.*?,\s*\d+\s*Hz,\s*([0-9\.]+)\s*channels?") {
-        $info.AudioChannels = [int]$matches[1]
+    $info = @{
+        AudioChannels = 0
+        AudioCodec = "unknown"
     }
-    elseif ($Output -match "Audio:.*?,\s*\d+\s*Hz,\s*([^\s,]+),") {
-        # Sucht nach textuellen Kanalbeschreibungen wie "mono", "stereo", "5.1" etc.
-        switch -Regex ($matches[1]) {
-            "mono" { $info.AudioChannels = 1 }
-            "stereo" { $info.AudioChannels = 2 }
-            "5\.1" { $info.AudioChannels = 6 }
-            "7\.1" { $info.AudioChannels = 8 }
-            default { $info.AudioChannels = 0 }
+
+    # 1. Extrahiert den Audio-Codec
+    if ($Output -match "Audio:\s*([a-zA-Z0-9_\-]+)") {
+        $info.AudioCodec = $matches[1].ToLower()
+    }
+
+    # 2. Extrahiert die Kanalanzahl
+    if ($Output -match "Audio:.*") {
+        $audioLine = $matches[0]
+
+        # Pruefe auf "X channels" (z.B. "6 channels" oder "5.1 channels")
+        if ($audioLine -match "(\d+(\.\d+)?)\s*channels?") {
+            $chanVal = $matches[1]
+            if ($chanVal -match "^(\d+)\.(\d+)$") {
+                $info.AudioChannels = [int]$matches[1] + [int]$matches[2]
+            } else {
+                $info.AudioChannels = [int]$chanVal
+            }
         }
-    }
-
-    # Extrahiert den Audio-Codec (z.B. aac, ac3, dts).
-    if ($Output -match "Audio:\s*([\w\-\d]+)") {
-        $info.AudioCodec = $matches[1]
+        # Pruefe auf Standard-Layouts oder X.Y Notation nach der Frequenz
+        elseif ($audioLine -match "\d+\s*Hz,\s*([^,]+)") {
+            $layoutPart = $matches[1].Trim()
+            switch -Regex ($layoutPart) {
+                "mono"      { $info.AudioChannels = 1; break }
+                "stereo"    { $info.AudioChannels = 2; break }
+                "2\.1"      { $info.AudioChannels = 3; break }
+                "quad"      { $info.AudioChannels = 4; break }
+                "5\.0"      { $info.AudioChannels = 5; break }
+                "5\.1"      { $info.AudioChannels = 6; break }
+                "6\.1"      { $info.AudioChannels = 7; break }
+                "7\.1"      { $info.AudioChannels = 8; break }
+                "^(\d+)\.(\d+)" {
+                    $info.AudioChannels = [int]$matches[1] + [int]$matches[2]
+                    break
+                }
+                "^(\d+)$" {
+                    $info.AudioChannels = [int]$matches[1]
+                    break
+                }
+            }
+        }
     }
 
     return $info
@@ -580,8 +603,8 @@ function Get-LoudnessInfo {
         $process.StartInfo = $processInfo
         $process.Start() | Out-Null
 
-        $process.WaitForExit()
         $ffmpegOutput = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
         return $ffmpegOutput
     }
     catch {
@@ -629,7 +652,7 @@ function Set-VolumeGain {
             "-loglevel", "info", # 'info' wird fuer '-stats' benoetigt, um die Fortschrittsanzeige zu erhalten
             "-stats", # Erzwingt die periodische Ausgabe von Kodierungsstatistiken
             "-y", # Überschreibt vorhandene Ausgabedateien ohne Nachfrage
-            "-threads", "12" # Nutzt 12 CPU-Threads fuer die Kodierung.
+            "-threads", "6" # Nutzt 6 CPU-Threads fuer die Kodierung.
         )
         # Hardwarebeschleunigung deaktivieren, wenn NoAccel gesetzt ist
         if ($sourceInfo.NoAccel -eq $true) {
@@ -674,6 +697,11 @@ function Set-VolumeGain {
             $cqpValueAvi = [math]::Round($baseCrfAvi * 1.2)
             $cqValueAvi = [math]::Round($baseCrfAvi * 1.2)
 
+            # Framerate-Begrenzung auch fuer AVI falls Framerate > 25 FPS
+            if ($sourceInfo.FPS -gt 25.1) {
+                $ffmpegArguments += @("-r", "25")
+            }
+
             if ($videoEncoder -eq "hevc_amf") {
                 # AMD HEVC
                 $ffmpegArguments += @(
@@ -698,15 +726,15 @@ function Set-VolumeGain {
             }
         }
         # Prueft verschiedene Bedingungen, um zu entscheiden, ob eine Video-Neukodierung erforderlich ist.
-        if ($sourceInfo.Force720p -or $sourceInfo.RecodeRecommended -or $needsReencodeDueToBitDepth -or ($videoCodec -ne $targetVideoCodec)) {
+        if ($sourceInfo.Force720p -or $sourceInfo.RecodeRecommended -or $needsReencodeDueToBitDepth -or ($videoCodec -ne $targetVideoCodec) -or ($sourceInfo.FPS -gt 25.1)) {
             Write-Host "Transcode aktiv..." -ForegroundColor Cyan
 
             # Videofilter-Kette initialisieren
             $videoFilterChain = @()
 
-            # Framerate-Begrenzung fuer Serien
-            if ($sourceInfo.IsSeries -eq $true -and $sourceInfo.FPS -gt 25) {
-                Write-Host "Framerate > 25 FPS erkannt. Begrenze auf 25 FPS." -ForegroundColor Magenta
+            # Framerate-Begrenzung: Wenn Framerate > 25 FPS erkannt wird, auf 25 FPS reduzieren
+            if ($sourceInfo.FPS -gt 25.1) {
+                Write-Host "Framerate > 25 FPS ($($sourceInfo.FPS) FPS) erkannt. Begrenze auf 25 FPS." -ForegroundColor Magenta
                 $ffmpegArguments += @("-r", "25")
             }
 
@@ -737,14 +765,21 @@ function Set-VolumeGain {
             }
 
             if ($videoEncoder -eq "hevc_amf") {
-                # AMD
+                $qpMax = [math]::Min($cqpValue + 8, 51)
                 $ffmpegArguments += @(
-                    "-c:v", $videoEncoder,
-                    "-pix_fmt", "yuv420p",
-                    "-quality", $amd_quality,
-                    "-rc", "cqp",
-                    "-qp_i", $cqpValue, "-qp_p", $cqpValue, "-qp_b", $cqpValue
-                )
+                "-c:v", $videoEncoder,
+                "-pix_fmt", "yuv420p",
+                "-quality", "quality",
+                "-rc", "qvbr",
+                "-qvbr_quality_level", $cqpValue,
+                "-qmin", $cqpValue,
+                "-qmax", $qpMax,
+                "-tiles", "2x2",
+                "-b:v", "0",
+                "-bf", "2",                # B-Frames
+                "-b_ref_mode", "1",
+                "-pa_scene_change_detection_enable", "1"
+              )
             }
             elseif ($videoEncoder -eq "hevc_nvenc") {
                 # NVIDIA
@@ -761,7 +796,7 @@ function Set-VolumeGain {
                 )
             }
             else {
-                # CPU
+                # CPU - optimierte x265 Parameter fuer beste Kompression
                 $ffmpegArguments += @(
                     "-c:v", "libx265"
                 )
@@ -771,9 +806,9 @@ function Set-VolumeGain {
                     )
                 }
                 $ffmpegArguments += @(
-                    "-preset", $encoderPreset,
+                    "-preset", "slow",
                     "-crf", $qualityValue,
-                    "-x265-params", "log-level=warning:nr=0:aq-mode=1:frame-threads=12:qcomp=0.7",
+                    "-x265-params", "log-level=warning:aq-mode=3:aq-strength=0.8:psy-rd=1.0:psy-rdoq=0.5:rdoq-level=2:bframes=8:ref=4:deblock=-1,-1:me=hex:subme=6:qcomp=0.75:rc-lookahead=30:frame-threads=2:pools=6",
                     "-max_muxing_queue_size", "1024"
                 )
             }
@@ -855,44 +890,69 @@ function Set-VolumeGain {
             $process.Start() | Out-Null
 
             # Berechnet die Gesamtzahl der Frames fuer eine robustere Fortschrittsanzeige.
+            Write-Host "Starte Fortschrittsanzeige fuer CPU-Encoding..." -ForegroundColor Cyan
             $totalFrames = [math]::Round($sourceInfo.Duration1 * $sourceInfo.FPS)
+
+            # Timeout-Initialisierung fuer Hang-Detection
+            $lastOutputTime = Get-Date
+            $hangTimeoutSeconds = 300 # 5 Minuten Timeout
+            $readTask = $process.StandardError.ReadLineAsync()
 
             # Echtzeit-Verarbeitung der FFmpeg-Ausgabe zur Restzeitberechnung
             while (-not $process.HasExited) {
-                # Schleife laeuft, solange der FFmpeg-Prozess aktiv ist.
-                $line = $process.StandardError.ReadLine()
-                if ($line -like "frame=*") {
-                    # Extrahiere verarbeitete Frames und aktuelle Kodier-FPS
-                    $progressMatch = [regex]::Match($line, "frame=\s*(\d+)\s+fps=\s*([\d\.]+)")
-                    if ($progressMatch.Success) {
-                        $processedFrames = [int64]$progressMatch.Groups[1].Value
-                        $currentFps = [double]$progressMatch.Groups[2].Value.Replace('.', ',')
+                # Pruefen ob neue Daten vom Prozess verfuegbar sind (non-blocking)
+                if ($readTask.IsCompleted) {
+                    $line = $readTask.Result
 
-                        if ($currentFps -gt 0 -and $totalFrames -gt 0 -and $processedFrames -le $totalFrames) {
-                            $remainingFrames = $totalFrames - $processedFrames
-                            $remainingExecutionSeconds = $remainingFrames / $currentFps
-                            $remainingTimeSpan = [TimeSpan]::FromSeconds($remainingExecutionSeconds)
-                            $percentComplete = ($processedFrames / $totalFrames) * 100
+                    if ($null -ne $line) {
+                        $lastOutputTime = Get-Date # Zeitstempel aktualisieren bei Aktivitaet
 
-                            # Stelle sicher, dass der Prozentsatz nicht ueber 100 geht
-                            if ($percentComplete -gt 100) { $percentComplete = 100.0 }
-                            $progressText = "Fortschritt: {0:N2}% | Verbleibend: {1:hh\h\:mm\m\:ss\s} | FPS: {2:N0}" -f $percentComplete, $remainingTimeSpan, $currentFps
-                            Write-Host "`r$progressText" -NoNewline -ForegroundColor Gray
+                        if ($line -like "frame=*") {
+                            # Extrahiere verarbeitete Frames und aktuelle Kodier-FPS
+                            $progressMatch = [regex]::Match($line, "frame=\s*(\d+)\s+fps=\s*([\d\.]+)")
+                            if ($progressMatch.Success) {
+                                $processedFrames = [int64]$progressMatch.Groups[1].Value
+                                $currentFps = [double]$progressMatch.Groups[2].Value.Replace('.', ',')
+
+                                if ($currentFps -gt 0 -and $totalFrames -gt 0 -and $processedFrames -le $totalFrames) {
+                                    $remainingFrames = $totalFrames - $processedFrames
+                                    $remainingExecutionSeconds = $remainingFrames / $currentFps
+                                    $remainingTimeSpan = [TimeSpan]::FromSeconds($remainingExecutionSeconds)
+                                    $percentComplete = ($processedFrames / $totalFrames) * 100
+
+                                    # Stelle sicher, dass der Prozentsatz nicht ueber 100 geht
+                                    if ($percentComplete -gt 100) { $percentComplete = 100.0 }
+                                    $progressText = "Fortschritt: {0:N2}% | Verbleibend: {1:hh\h\:mm\m\:ss\s} | FPS: {2:N0}" -f $percentComplete, $remainingTimeSpan, $currentFps
+                                    Write-Host "`r$progressText" -NoNewline -ForegroundColor Gray
+                                }
+                            }
                         }
+                        # Naechste Zeile asynchron lesen
+                        $readTask = $process.StandardError.ReadLineAsync()
                     }
                 }
+
+                # Hang-Detection: Pruefen ob Timeout ueberschritten
+                if (((Get-Date) - $lastOutputTime).TotalSeconds -gt $hangTimeoutSeconds) {
+                    $process.Kill()
+                    Write-Host "`nFEHLER: FFmpeg-Prozess reagiert seit $hangTimeoutSeconds Sekunden nicht mehr. Prozess wurde beendet." -ForegroundColor Red
+                    throw "FFmpeg-Prozess haengt (Timeout)."
+                }
+
+                # Kurze Pause um CPU-Last niedrig zu halten waehrend wir warten
+                Start-Sleep -Milliseconds 50
             }
 
             # Sorgt fuer einen sauberen Zeilenumbruch nach der einzeiligen Fortschrittsanzeige.
             Write-Host ""
 
             $process.WaitForExit()
-            
+
             $remainingErrors = $process.StandardError.ReadToEnd()
             if ($remainingErrors) {
                 $allErrors += $remainingErrors.Split([System.Environment]::NewLine)
             }
-            
+
             $exitCode = $process.ExitCode
             if ($exitCode -eq 0) {
                 Write-Host "Lautstaerkeanpassung abgeschlossen fuer: $($filePath)" -ForegroundColor Green
@@ -911,52 +971,56 @@ function Set-VolumeGain {
             "`n==== Fehler bei GPU-Encoding: `n$_ ====" | Add-Content -LiteralPath $logDatei
             Write-Host "Versuche CPU encoding (libx265)..." -ForegroundColor Yellow
             "`n==== Versuche CPU encoding (libx265)... ====" | Add-Content -LiteralPath $logDatei
-            if ($videoEncoder -eq "hevc_nvenc") {
-                # NVIDIA
-                $ffmpegArguments -= @(
-                    "-c:v", $videoEncoder,
-                    "-pix_fmt", "yuv420p",
-                    "-preset", $Nvidia_quality,
-                    "-rc", "constqp ",
-                    "-cqi", $cqValue,
-                    "-qpp", "$cqValue",
-                    "-qp_cb", "$cqValue",
-                    "-qp_cr", "$cqValue",
-                    "-b:v", "0"
-                )
-            }
-            if ($videoEncoder -eq "hevc_amf") {
-                # AMD - Entferne alle Argumente einzeln
-                $ffmpegArguments = $ffmpegArguments | Where-Object { $_ -ne "-c:v" }
-                $ffmpegArguments = $ffmpegArguments | Where-Object { $_ -ne $videoEncoder }
-                $ffmpegArguments = $ffmpegArguments | Where-Object { $_ -ne "-pix_fmt" }
-                $ffmpegArguments = $ffmpegArguments | Where-Object { $_ -ne "yuv420p" }
-                $ffmpegArguments = $ffmpegArguments | Where-Object { $_ -ne "-quality" }
-                $ffmpegArguments = $ffmpegArguments | Where-Object { $_ -ne $amd_quality }
-                $ffmpegArguments = $ffmpegArguments | Where-Object { $_ -ne "-rc" }
-                $ffmpegArguments = $ffmpegArguments | Where-Object { $_ -ne "cqp" }
-                $ffmpegArguments = $ffmpegArguments | Where-Object { $_ -ne "-qp_i" }
-                $ffmpegArguments = $ffmpegArguments | Where-Object { $_ -ne $cqpValue }
-                $ffmpegArguments = $ffmpegArguments | Where-Object { $_ -ne "-qp_p" }
-                $ffmpegArguments = $ffmpegArguments | Where-Object { $_ -ne $cqpValue }
-                $ffmpegArguments = $ffmpegArguments | Where-Object { $_ -ne "-qp_b" }
-                $ffmpegArguments = $ffmpegArguments | Where-Object { $_ -ne $cqpValue }
+
+            # Baue die Argumente komplett neu auf, um Fehler in der Reihenfolge zu vermeiden
+            $newArgs = @(
+                "-hide_banner",
+                "-loglevel", "info",
+                "-stats",
+                "-y",
+                "-threads", "6"
+            )
+
+            # Hardware-Decoding nur, wenn nicht AV1
+            if ($sourceInfo.NoAccel -ne $true) {
+                $newArgs += @("-hwaccel", "d3d11va")
             }
 
-            $ffmpegArgumentsList = [System.Collections.ArrayList]$ffmpegArguments
-            $ffmpegArgumentsList.Insert(9, "-c:v")
-            $ffmpegArgumentsList.Insert(10, "libx265")
-            $ffmpegArgumentsList.Insert(11, "-pix_fmt")
-            $ffmpegArgumentsList.Insert(12, "yuv420p")
-            $ffmpegArgumentsList.Insert(13, "-preset")
-            $ffmpegArgumentsList.Insert(14, $encoderPreset)
-            $ffmpegArgumentsList.Insert(15, "-crf")
-            $ffmpegArgumentsList.Insert(16, $qualityValue)
-            $ffmpegArgumentsList.Insert(17, "-x265-params")
-            $ffmpegArgumentsList.Insert(18, "log-level=warning:nr=0:aq-mode=1:frame-threads=12:qcomp=0.7")
-            $ffmpegArgumentsList.Insert(19, "-max_muxing_queue_size")
-            $ffmpegArgumentsList.Insert(20, "1024")
-            $ffmpegArguments = $ffmpegArgumentsList.ToArray()
+            # Eingabedatei
+            $newArgs += @("-i", "`"$($filePath)`"")
+
+            # CPU Video-Optionen
+            $newArgs += @(
+                "-c:v", "libx265",
+                "-pix_fmt", "yuv420p",
+                "-preset", $encoderPreset,
+                "-crf", $qualityValue,
+                "-x265-params", "log-level=warning:nr=0:aq-mode=1:frame-threads=12:qcomp=0.7",
+                "-max_muxing_queue_size", "1024"
+            )
+
+            # Audio-Optionen beibehalten oder neu setzen
+            if ([math]::Abs($gain) -gt 0.2) {
+                $newArgs += @("-c:a", "libfdk_aac")
+                if ($audioChannels -gt 2) { $newArgs += @("-vbr", "3") }
+                elseif ($audioChannels -eq 2) { $newArgs += @("-vbr", "2") }
+                else { $newArgs += @("-vbr", "1", "-ac", "1") }
+            } else {
+                $newArgs += @("-c:a", "copy")
+            }
+
+            # Finale Filter und Metadaten
+            $newArgs += @(
+                "-af", "volume=${gain}dB",
+                "-c:s", "copy",
+                "-metadata", "LUFS=$targetLoudness",
+                "-metadata", "gained=$gain",
+                "-metadata", "normalized=true",
+                "-disposition:a:0", "default",
+                "`"$($outputFile)`""
+            )
+
+            $ffmpegArguments = $newArgs
 
             Write-Host "FFmpeg-Argumente: $($ffmpegArguments -join ' ')" -ForegroundColor DarkCyan
             "`n==== FFmpeg-Argumente: $($ffmpegArguments -join ' ') ====" | Add-Content -LiteralPath $logDatei
@@ -975,44 +1039,69 @@ function Set-VolumeGain {
             $process.Start() | Out-Null
 
             # Berechnet die Gesamtzahl der Frames fuer eine robustere Fortschrittsanzeige.
+
+
             $totalFrames = [math]::Round($sourceInfo.Duration1 * $sourceInfo.FPS)
+
+            # Timeout-Initialisierung fuer Hang-Detection (CPU Fallback)
+            $lastOutputTime = Get-Date
+            $hangTimeoutSeconds = 300 # 5 Minuten Timeout
+            $readTask = $process.StandardError.ReadLineAsync()
 
             # Echtzeit-Verarbeitung der FFmpeg-Ausgabe zur Restzeitberechnung
             while (-not $process.HasExited) {
-                # Schleife laeuft, solange der FFmpeg-Prozess aktiv ist.
-                $line = $process.StandardError.ReadLine()
-                if ($line -like "frame=*") {
-                    # Extrahiere verarbeitete Frames und aktuelle Kodier-FPS
-                    $progressMatch = [regex]::Match($line, "frame=\s*(\d+)\s+fps=\s*([\d\.]+)")
-                    if ($progressMatch.Success) {
-                        $processedFrames = [int64]$progressMatch.Groups[1].Value
-                        $currentFps = [double]$progressMatch.Groups[2].Value.Replace('.', ',')
+                # Pruefen ob neue Daten vom Prozess verfuegbar sind (non-blocking)
+                if ($readTask.IsCompleted) {
+                    $line = $readTask.Result
 
-                        if ($currentFps -gt 0 -and $totalFrames -gt 0 -and $processedFrames -le $totalFrames) {
-                            $remainingFrames = $totalFrames - $processedFrames
-                            $remainingExecutionSeconds = $remainingFrames / $currentFps
-                            $remainingTimeSpan = [TimeSpan]::FromSeconds($remainingExecutionSeconds)
-                            $percentComplete = ($processedFrames / $totalFrames) * 100
+                    if ($null -ne $line) {
+                        $lastOutputTime = Get-Date # Zeitstempel aktualisieren bei Aktivitaet
 
-                            # Stelle sicher, dass der Prozentsatz nicht ueber 100 geht
-                            if ($percentComplete -gt 100) { $percentComplete = 100.0 }
-                            $progressText = "Fortschritt: {0:N2}% | Verbleibend: {1:hh\h\:mm\m\:ss\s} | FPS: {2:N0}" -f $percentComplete, $remainingTimeSpan, $currentFps
-                            Write-Host "`r$progressText" -NoNewline -ForegroundColor Gray
+                        if ($line -like "frame=*") {
+                            # Extrahiere verarbeitete Frames und aktuelle Kodier-FPS
+                            $progressMatch = [regex]::Match($line, "frame=\s*(\d+)\s+fps=\s*([\d\.]+)")
+                            if ($progressMatch.Success) {
+                                $processedFrames = [int64]$progressMatch.Groups[1].Value
+                                $currentFps = [double]$progressMatch.Groups[2].Value.Replace('.', ',')
+
+                                if ($currentFps -gt 0 -and $totalFrames -gt 0 -and $processedFrames -le $totalFrames) {
+                                    $remainingFrames = $totalFrames - $processedFrames
+                                    $remainingExecutionSeconds = $remainingFrames / $currentFps
+                                    $remainingTimeSpan = [TimeSpan]::FromSeconds($remainingExecutionSeconds)
+                                    $percentComplete = ($processedFrames / $totalFrames) * 100
+
+                                    # Stelle sicher, dass der Prozentsatz nicht ueber 100 geht
+                                    if ($percentComplete -gt 100) { $percentComplete = 100.0 }
+                                    $progressText = "Fortschritt: {0:N2}% | Verbleibend: {1:hh\h\:mm\m\:ss\s} | FPS: {2:N0}" -f $percentComplete, $remainingTimeSpan, $currentFps
+                                    Write-Host "`r$progressText" -NoNewline -ForegroundColor Gray
+                                }
+                            }
                         }
+                        # Naechste Zeile asynchron lesen
+                        $readTask = $process.StandardError.ReadLineAsync()
                     }
                 }
+
+                # Hang-Detection: Pruefen ob Timeout ueberschritten
+                if (((Get-Date) - $lastOutputTime).TotalSeconds -gt $hangTimeoutSeconds) {
+                    $process.Kill()
+                    Write-Host "`nFEHLER: FFmpeg-Prozess reagiert seit $hangTimeoutSeconds Sekunden nicht mehr. Prozess wurde beendet." -ForegroundColor Red
+                    throw "FFmpeg-Prozess haengt (Timeout)."
+                }
+
+                Start-Sleep -Milliseconds 50
             }
 
             # Sorgt fuer einen sauberen Zeilenumbruch nach der einzeiligen Fortschrittsanzeige.
             Write-Host ""
 
             $process.WaitForExit()
-            
+
             $remainingErrors = $process.StandardError.ReadToEnd()
             if ($remainingErrors) {
                 $cpuErrors += $remainingErrors.Split([System.Environment]::NewLine)
             }
-            
+
             $exitCode = $process.ExitCode
 
         }
@@ -1201,7 +1290,6 @@ function Invoke-IntegrityCheck {
 }
 function Test-FileIntegrity {
     # Überprueft die Integritaet einer Mediendatei, indem FFmpeg versucht, sie zu dekodieren. Fehler werden protokolliert.
-    # Überprueft die Integritaet einer Mediendatei, indem FFmpeg versucht, sie zu dekodieren. Fehler werden protokolliert.
     param (
         [Parameter(Mandatory = $true)]
         [string]$outputFile,
@@ -1338,7 +1426,6 @@ if ($useHardwareAccel -eq $true) {
     $videoEncoder = Get-HardwareEncoder -ffmpegPath $ffmpegPath
 }
 
-
 # Zeigt einen Dialog zur Auswahl des zu verarbeitenden Ordners an.
 Add-Type -AssemblyName System.Windows.Forms
 $PickFolder = New-Object -TypeName System.Windows.Forms.OpenFileDialog
@@ -1365,19 +1452,19 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
     # Sucht rekursiv nach allen relevanten Videodateien im ausgewaehlten Ordner. Die .NET-Methode ist schneller als Get-ChildItem.
     $startTime = Get-Date
     $fileCount = 0
-    
-    $mkvFiles = [System.IO.Directory]::EnumerateFiles($destFolder, '*.*', [System.IO.SearchOption]::AllDirectories) | 
-        Where-Object { 
-            ($extensions -contains [System.IO.Path]::GetExtension($_).ToLowerInvariant()) -and 
-            ((Get-Item (Split-Path -Path $_ -Parent)).Name -ne "Fertig") 
-        } | 
+
+    $mkvFiles = [System.IO.Directory]::EnumerateFiles($destFolder, '*.*', [System.IO.SearchOption]::AllDirectories) |
+        Where-Object {
+            ($extensions -contains [System.IO.Path]::GetExtension($_).ToLowerInvariant()) -and
+            ((Get-Item (Split-Path -Path $_ -Parent)).Name -ne "Fertig")
+        } |
         ForEach-Object {
             $fileCount++
             Write-Host "`rRelevante Dateien gefunden: $fileCount" -NoNewline -ForegroundColor Cyan
             $_
-        } | 
+        } |
         Sort-Object
-    
+
     Write-Host ""
     $mkvFileCount = ($mkvFiles | Measure-Object).Count
     $endTime = Get-Date
@@ -1386,6 +1473,9 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
 
     # --- Parallele Überprüfung der Normalisierungs-Tags ---
     Write-Host "Starte parallele Überprüfung der Normalisierungs-Tags für $mkvFileCount Dateien..." -ForegroundColor Cyan
+
+    # Synchronisierter Zähler für den Fortschritt
+    $processedQueue = [System.Collections.Concurrent.ConcurrentQueue[int]]::new()
 
     # Die Funktionsdefinition in einer Variablen speichern, um sie an die parallelen Threads zu übergeben.
     $TestIsNormalizedFuncDef = (Get-Content "function:\Test-IsNormalized").ToString()
@@ -1396,8 +1486,17 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
 
         # Die modifizierte Funktion aufrufen, die ein Objekt zurückgibt
         # Wichtig: $using: wird benötigt, um auf Variablen außerhalb des parallelen Bereichs zuzugreifen.
-        Test-IsNormalized -file $_ -mkvextractPath $using:mkvextractPath
+        $res = Test-IsNormalized -file $_ -mkvextractPath $using:mkvextractPath
+
+        # Fortschritt aktualisieren und anzeigen
+        $localQueue = $using:processedQueue
+        $localQueue.Enqueue(1)
+        $remaining = $using:mkvFileCount - $localQueue.Count
+        Write-Host "`rNoch zu prüfen: $remaining Dateien... " -NoNewline -ForegroundColor Yellow
+
+        $res
     } -ThrottleLimit 8 # Die Anzahl der parallelen Threads, anpassen je nach CPU-Kernen
+    Write-Host ""
 
     # Ergebnisse der parallelen Verarbeitung auswerten, Listen füllen und dabei eine stabile Fortschrittsanzeige ausgeben.
     $processedCounter = 0
@@ -1435,6 +1534,7 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
         # Erstelle .embyignore-Datei fuer aktuelle Datei
         $ignoreFile = Join-Path (Get-Item -LiteralPath $file).DirectoryName ".embyignore"
         New-Item -Path $ignoreFile -ItemType File -Force | Out-Null
+        $previousIgnoreFile = $ignoreFile
 
         # Initialisiere Encoding-Flag fuer diese Datei (nicht vom vorherigen Durchlauf uebernehmen)
         $videocopy = $false
@@ -1448,6 +1548,8 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
         # --- Start der Verarbeitung fuer nicht normalisierte Dateien ---
         try {
             # Extrahiert die Metadaten der Quelldatei.
+            # Diese Informationen werden sowohl fuer die Lautheitsanalyse als auch fuer die Validierung der Ausgabedatei benoetigt.
+            # Beteiligte funktionen: Get-MediaInfo, Get-FFmpegOutput, Get-BasicVideoInfo, Get-ColorAndHDRInfo, Get-AudioInfo, Get-InterlaceInfo, Test-IsSeries, Get-RecodeAnalysis, Measure-ExpectedSizeMB
             $sourceInfo = Get-MediaInfo -filePath $file -logDatei $logDatei -ffmpegPath $ffmpegPath
             if (-not $sourceInfo) {
                 throw "Konnte Mediendaten nicht extrahieren."
@@ -1544,6 +1646,17 @@ if ($result -eq [Windows.Forms.DialogResult]::OK) {
         }
         catch {
             Write-Host "  FEHLER: Konnte Log-Datei nicht loeschen $logFile : $_" -ForegroundColor Red
+        }
+    }
+
+    $ignoreFiles = [System.IO.Directory]::EnumerateFiles($destFolder, "*.embyignore", [System.IO.SearchOption]::AllDirectories)
+    foreach ($ignoreFile in $ignoreFiles) {
+        try {
+            Remove-Item -Path $ignoreFile -Force
+            Write-Host "  Geloescht (Ignore): $ignoreFile" -ForegroundColor Green
+        }
+        catch {
+            Write-Host "  FEHLER: Konnte Ignore-Datei nicht loeschen $ignoreFile : $_" -ForegroundColor Red
         }
     }
 

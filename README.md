@@ -47,6 +47,7 @@ Perfekt für moderne Systeme mit mehreren CPU-Kernen!
 ### 🛡️ Sicher & Zuverlässig
 - **Integritätsprüfung:** Jede neu erstellte Datei wird mit `ffmpeg` auf Stream-Fehler überprüft, um sicherzustellen, dass das Ergebnis perfekt ist.
 - **Keine Duplikate:** Das Skript erkennt bereits normalisierte Dateien anhand von Metadaten-Tags und überspringt sie, um doppelte Arbeit zu vermeiden.
+- **Emby-Integration (.embyignore):** Während der Verarbeitung wird automatisch eine `.embyignore`-Datei im aktuellen Ordner erstellt. Dies verhindert, dass Mediaserver wie **Emby** oder **Jellyfin** unfertige oder temporäre Dateien während des Transcodierens in die Bibliothek aufnehmen. Nach Abschluss wird die Datei sauber entfernt.
 - **Detailliertes Logging:** Für jede verarbeitete Datei wird eine eigene Log-Datei erstellt, die jeden einzelnen Schritt und jede Entscheidung dokumentiert. Perfekt für die Fehlersuche und Nachverfolgung!
 
 ---
@@ -109,10 +110,11 @@ Dieses Skript löscht die Originaldateien nach einer erfolgreichen Konvertierung
 | Metadaten-Analyse | ✅ Complete | Codec, Auflösung, Audio, Interlace, HDR, Bittiefe |
 | Serien-Erkennung | ✅ Complete | SxxExx Pattern-Matching |
 | Normalisierungs-Checking | ✅ Complete | Parallele Überprüfung mit Fortschritts-Tracking |
+| Emby-Integration | ✅ Complete | Automatische .embyignore Erstellung & Bereinigung |
 | Video-Transkodierung | 🔄 In Development | HEVC-Encoding mit CRF-Optimierung |
 | Audio-Normalisierung | ✅ Complete | EBUR128-Messung, AAC-Kodierung (Session 3 validiert) |
 | AVI-Spezialbehandlung | ✅ Complete | Deinterlace, Denoise, Upscale, Sharpen |
 | Error Handling & Logging | 🔄 In Development | Detaillierte Logs pro Datei |
-| **Code-Qualität** | **✅ Improved** | **Session 2-3: 0 implizite Globals, -21 Zeilen, +18 Parameter** |
+| **Code-Qualität** | **✅ Improved** | **Session 5: .embyignore logic fixed** |
 
 ---
