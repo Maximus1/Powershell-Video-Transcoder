@@ -1,4 +1,17 @@
-﻿#region Skript-Initialisierung
+﻿# ---------------------------------------------------------------------------------
+# Serien Umbenenner Tool
+# ---------------------------------------------------------------------------------
+# Dieses Skript automatisiert das Umbenennen von Serien-Dateien durch Online-Abgleich.
+#
+# Hauptfunktionen:
+# - Sucht automatisch nach Serieninformationen auf fernsehserien.de
+# - Erkennt Episoden-Nummern und Titel aus Dateinamen
+# - Bietet eine grafische Benutzeroberfläche zur Auswahl bei mehreren Treffern
+# - Unterstützt Scene-Tags und bereinigt Dateinamen von unnötigem Ballast
+# - Ermöglicht Massenumbenennung ganzer Ordnerstrukturen
+# ---------------------------------------------------------------------------------
+
+#region Skript-Initialisierung
 # ---------------------------------------------------------------------------------
 # Skript-Initialisierung
 # ---------------------------------------------------------------------------------
