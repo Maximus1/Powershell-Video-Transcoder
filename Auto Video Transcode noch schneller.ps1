@@ -1428,6 +1428,11 @@ if ($useHardwareAccel -eq $true) {
 
 # Zeigt einen Dialog zur Auswahl des zu verarbeitenden Ordners an.
 Add-Type -AssemblyName System.Windows.Forms
+
+# --- FIX: Unsichtbares Fenster erstellen, um den Fokus zu erzwingen ---
+$topWindow = New-Object System.Windows.Forms.Form
+$topWindow.TopMost = $true
+
 $PickFolder = New-Object -TypeName System.Windows.Forms.OpenFileDialog
 $PickFolder.FileName = 'Mediafolder'
 $PickFolder.Filter = 'Folder Selection|*.*'
@@ -1442,12 +1447,15 @@ $PickFolder.ValidateNames = $false
 # Initialisiert das Array, das die Statistiken fuer die spaetere Auswertung sammelt.
 $script:statistics = @()
 
-$result = $PickFolder.ShowDialog()
+$result = $PickFolder.ShowDialog($topWindow)
 
-if ($result -eq [Windows.Forms.DialogResult]::OK) {
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
     # Wenn der Benutzer einen Ordner ausgewaehlt hat
     $destFolder = Split-Path -Path $PickFolder.FileName
     Write-Host -Object "Ausgewaehlter Ordner: $destFolder" -ForegroundColor Green
+
+    # Das Hilfsfenster wieder schließen
+    $topWindow.Dispose()
 
     # Sucht rekursiv nach allen relevanten Videodateien im ausgewaehlten Ordner. Die .NET-Methode ist schneller als Get-ChildItem.
     $startTime = Get-Date
