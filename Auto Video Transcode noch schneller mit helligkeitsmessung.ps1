@@ -131,11 +131,15 @@ function Get-SystemGpuVendor {
 }
 function Test-IsNormalized {
     # Überprueft, ob eine MKV-Datei bereits ein "NORMALIZED=true"-Tag in ihren Metadaten enthaelt.
-    # Überprueft, ob eine MKV-Datei bereits ein "NORMALIZED=true"-Tag in ihren Metadaten enthaelt.
     param (
         [string]$file,
         [string]$mkvextractPath
     )
+
+    if ([io.path]::GetExtension($file).ToLower() -ne '.mkv') {
+        Write-Host "Test-IsNormalized: Datei ist keine MKV, Test wird uebersprungen: $file" -ForegroundColor DarkGray
+        return [PSCustomObject]@{ FilePath = $file; IsNormalized = $false; Warning = "Datei ist keine MKV; Test uebersprungen" }
+    }
 
     if (!(Test-Path $mkvextractPath)) {
         Write-Error "mkvextract.exe nicht gefunden unter $mkvextractPath"
@@ -1082,7 +1086,14 @@ function Set-VolumeGain {
 
                                     # Stelle sicher, dass der Prozentsatz nicht ueber 100 geht
                                     if ($percentComplete -gt 100) { $percentComplete = 100.0 }
-                                    $progressText = "Fortschritt: {0:N2}% | Verbleibend: {1:hh\h\:mm\m\:ss\s} | FPS: {2:N0}" -f $percentComplete, $remainingTimeSpan, $currentFps
+
+                                    # Aktuelle Dateigroesse abrufen und formatieren
+                                    $currentSizeMB = 0
+                                    if (Test-Path -LiteralPath $outputFile) {
+                                        # ErrorAction SilentlyContinue, falls die Datei gerade geschrieben wird und gesperrt ist
+                                        $currentSizeMB = (Get-Item -LiteralPath $outputFile -ErrorAction SilentlyContinue).Length / 1MB
+                                    }
+                                    $progressText = "Fortschritt: {0:N2}% | Verbleibend: {1:hh\h\:mm\m\:ss\s} | FPS: {2:N0} | Größe: {3:N2} MB" -f $percentComplete, $remainingTimeSpan, $currentFps, $currentSizeMB
                                     Write-Host "`r$progressText" -NoNewline -ForegroundColor Gray
                                 }
                             }
@@ -1232,7 +1243,14 @@ function Set-VolumeGain {
 
                                     # Stelle sicher, dass der Prozentsatz nicht ueber 100 geht
                                     if ($percentComplete -gt 100) { $percentComplete = 100.0 }
-                                    $progressText = "Fortschritt: {0:N2}% | Verbleibend: {1:hh\h\:mm\m\:ss\s} | FPS: {2:N0}" -f $percentComplete, $remainingTimeSpan, $currentFps
+
+                                    # Aktuelle Dateigroesse abrufen und formatieren
+                                    $currentSizeMB = 0
+                                    if (Test-Path -LiteralPath $outputFile) {
+                                        # ErrorAction SilentlyContinue, falls die Datei gerade geschrieben wird und gesperrt ist
+                                        $currentSizeMB = (Get-Item -LiteralPath $outputFile -ErrorAction SilentlyContinue).Length / 1MB
+                                    }
+                                    $progressText = "Fortschritt: {0:N2}% | Verbleibend: {1:hh\h\:mm\m\:ss\s} | FPS: {2:N0} | Größe: {3:N2} MB" -f $percentComplete, $remainingTimeSpan, $currentFps, $currentSizeMB
                                     Write-Host "`r$progressText" -NoNewline -ForegroundColor Gray
                                 }
                             }
@@ -1296,10 +1314,25 @@ function Get-VmafScore {
         [string]$SourceFile,
         [string]$OutputFile,
         [double]$StartSec,
-        [int]$DurationSec
+        [int]$DurationSec,
+        [hashtable]$sourceInfo
     )
 
-    Write-Host "  Starte VMAF-Messung (Start: ${StartSec}s, Dauer: ${DurationSec}s, n_subsample=5)..." -ForegroundColor Cyan
+    # Verwende vorhandene Serien-/Resize-Infos: wenn Test-IsSeries fuer die Quelldatei eine Skalierung erzwingt,
+    # ist ein Frame-basierter VMAF-Vergleich nicht sinnvoll -> ueberspringen.
+    try {
+        if ($sourceInfo.resize -eq $true -or $sourceInfo.Force720p -eq $true) {
+            Write-Host "  VMAF: Resize/Force720p erkannt durch Test-IsSeries — VMAF wird übersprungen." -ForegroundColor Yellow
+            return $null
+        }
+        else {
+            Write-Host "  VMAF: Keine Resize/Force720p-Erkennung — VMAF wird durchgeführt." -ForegroundColor Cyan
+            Write-Host "  Starte VMAF-Messung (Start: ${StartSec}s, Dauer: ${DurationSec}s, n_subsample=5)..." -ForegroundColor Cyan
+        }
+    }
+    catch {
+        # Fehler bei der Schnellprüfung ignorieren und normal weitermachen
+    }
 
     try {
         $startInfo = New-Object System.Diagnostics.ProcessStartInfo
@@ -1901,8 +1934,7 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
 
                     # VMAF nur messen wenn Validierung OK und Video tatsaechlich recodiert wurde.
                     if ($isOutputOk -and -not $videocopy) {
-                        $finalVmaf = Get-VmafScore -SourceFile $file -OutputFile $outputFile -StartSec $vmafStartSec -DurationSec $vmafDurationSec
-                        $bestVmaf  = $finalVmaf  # letzten gueltigen VMAF merken fuer eventuelle Wiederherstellung
+                            $finalVmaf = Get-VmafScore -SourceFile $file -OutputFile $outputFile -StartSec $vmafStartSec -DurationSec $vmafDurationSec -sourceInfo $sourceInfo
 
                         # Retry ausloesen wenn: AutoRetry aktiv, Score ausserhalb Toleranzzone, noch Versuche uebrig.
                         # Toleranzzone: Scores zwischen ($vmafMinScore - $vmafTolerance) und $vmafMinScore
