@@ -615,8 +615,8 @@ function Get-VideoBrightnessInfo {
             $proc.WaitForExit()
 
             # showinfo schreibt: mean:[Y U V] oder mean:[Y U V A] - erster Wert ist Luma 0-255
-            $matches   = [regex]::Matches($output, "mean:\[(\d+)")
-            $segValues = $matches | ForEach-Object { [double]$_.Groups[1].Value }
+            $regexMatches = [regex]::Matches($output, "mean:\[(\d+)")
+            $segValues = $regexMatches | ForEach-Object { [double]$_.Groups[1].Value }
             $allValues += $segValues
 
             if ($segValues.Count -gt 0) {
