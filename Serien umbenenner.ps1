@@ -10,7 +10,6 @@
 # - Unterstützt Scene-Tags und bereinigt Dateinamen von unnötigem Ballast
 # - Ermöglicht Massenumbenennung ganzer Ordnerstrukturen
 # ---------------------------------------------------------------------------------
-
 #region Skript-Initialisierung
 # ---------------------------------------------------------------------------------
 # Skript-Initialisierung
@@ -435,22 +434,22 @@ function Show-EpisodeSelectionGui {
     
     # Event-Handler für Spaltenklick
     $listView.add_ColumnClick({
-        param($sender, $e)
+        param($listViewSender, $e)
         
         # Prüfen, ob die gleiche Spalte erneut geklickt wurde
-        if ($sender.ListViewItemSorter.Column -eq $e.Column) {
+        if ($listViewSender.ListViewItemSorter.Column -eq $e.Column) {
             # Sortierreihenfolge umkehren
-            if ($sender.ListViewItemSorter.Order -eq [System.Windows.Forms.SortOrder]::Ascending) {
-                $sender.ListViewItemSorter.Order = [System.Windows.Forms.SortOrder]::Descending
+            if ($listViewSender.ListViewItemSorter.Order -eq [System.Windows.Forms.SortOrder]::Ascending) {
+                $listViewSender.ListViewItemSorter.Order = [System.Windows.Forms.SortOrder]::Descending
             } else {
-                $sender.ListViewItemSorter.Order = [System.Windows.Forms.SortOrder]::Ascending
+                $listViewSender.ListViewItemSorter.Order = [System.Windows.Forms.SortOrder]::Ascending
             }
         } else {
             # Neue Spalte: Standardmäßig aufsteigend sortieren
-            $sender.ListViewItemSorter.Column = $e.Column
-            $sender.ListViewItemSorter.Order = [System.Windows.Forms.SortOrder]::Ascending
+            $listViewSender.ListViewItemSorter.Column = $e.Column
+            $listViewSender.ListViewItemSorter.Order = [System.Windows.Forms.SortOrder]::Ascending
         }
-        $sender.Sort() # Sortierung ausführen
+        $listViewSender.Sort() # Sortierung ausführen
     })
     # ----------------------------------
 
@@ -511,7 +510,7 @@ function Show-EpisodeSelectionGui {
 }
 #
 # Extrahiert alle Episoden aus dem HTML-Inhalt und gibt sie als strukturierte Liste zurück.
-function Parse-EpisodeGuide {
+function Import-EpisodeGuide {
     param (
         [string]$GuideContent
     )
@@ -852,7 +851,7 @@ function Update-LocalSeriesInfo {
 }
 
 # --- NEU: Gekapselte Funktion für die Verarbeitung einer einzelnen Datei ---
-function Process-File {
+function Update-File {
     param(
         [Parameter(Mandatory)]
         $file,
@@ -1138,7 +1137,7 @@ function Process-File {
         # Parsen des Inhalts, falls noch nicht geschehen
         if ($null -eq $script:cachedSeries.ParsedEpisodes) {
              Write-Host "Parse Episodenguide einmalig für den Cache..." -ForegroundColor Cyan
-             $script:cachedSeries.ParsedEpisodes = Parse-EpisodeGuide -GuideContent $script:cachedSeries.EpisodeGuideContent
+             $script:cachedSeries.ParsedEpisodes = Import-EpisodeGuide -GuideContent $script:cachedSeries.EpisodeGuideContent
              
              # --- NEU: Nach dem Parsen in Datei speichern ---
              $serienInfoPath = Join-Path $script:selectedPath "Serieninfo.txt"
@@ -1239,7 +1238,7 @@ $retryFiles = @()
 # Beginnt die Schleife zur Verarbeitung jeder einzelnen Datei (1. Durchlauf).
 Write-Host "=== Start 1. Durchlauf (Top 8 Treffer) ===" -ForegroundColor Cyan
 foreach ($file in $files) { # Startet die Schleife für jede gefundene Datei.
-    $success = Process-File -File $file -ShowAllMatches:$false
+    $success = Update-File -File $file -ShowAllMatches:$false
     
     if (-not $success) {
         $retryFiles += $file
@@ -1255,7 +1254,7 @@ if ($retryFiles.Count -gt 0) {
     $msgResult = [System.Windows.Forms.MessageBox]::Show("Sollen im zweiten Durchlauf auch bereits als 'gefunden' markierte Episoden (aus Serieninfo.txt) wiederverwendet werden?", "Erweiterte Suche", "YesNo", "Question")
     if ($msgResult -eq "Yes") {
         $script:includeUsedEpisodes = $true
-        # Cache leeren, damit beim nächsten Process-File die Datei neu geladen wird (mit * Einträgen)
+        # Cache leeren, damit beim nächsten Update-File die Datei neu geladen wird (mit * Einträgen)
         $script:cachedSeries.Name = "" 
         $script:cachedSeries.ParsedEpisodes = $null
         Write-Host "Bereits verwendete Episoden werden nun einbezogen." -ForegroundColor Magenta
@@ -1270,7 +1269,7 @@ if ($retryFiles.Count -gt 0) {
             # Erneuter Aufruf mit ShowAllMatches = $true
             # Refresh File-Objekt um sicherzustellen, dass Pfad etc. aktuell sind
             $currentFile = Get-Item $file.FullName
-            Process-File -File $currentFile -ShowAllMatches:$true
+            Update-File -File $currentFile -ShowAllMatches:$true
         }
     }
 }
