@@ -1,5 +1,5 @@
 ﻿# ---------------------------------------------------------------------------------
-# Serien Umbenenner Tool
+# Das Serien Umbenenner Tool
 # ---------------------------------------------------------------------------------
 # Dieses Skript automatisiert das Umbenennen von Serien-Dateien durch Online-Abgleich.
 #
