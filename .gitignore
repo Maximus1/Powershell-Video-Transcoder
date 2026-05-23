@@ -11,3 +11,5 @@ ARCHITECTURE.md
 
 #Ignore vscode AI rules
 .github\instructions\codacy.instructions.md
+.clinerules
+NewMonitoringFunctions.ps1

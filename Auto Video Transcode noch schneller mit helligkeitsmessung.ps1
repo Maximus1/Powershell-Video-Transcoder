@@ -1889,7 +1889,6 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
                 $isOutputOk      = $false
                 $backupFile      = $outputFile + ".backup"
                 $bestVmaf        = $null
-                $bestOutputValid = $false
 
                 do {
                     if ($retryCount -gt 0) {
