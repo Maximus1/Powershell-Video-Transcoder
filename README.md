@@ -1,3 +1,5 @@
+[![Codacy Badge](https://app.codacy.com/project/badge/Grade/0ec11745ed0c4e268fa6fd2316f53b57)](https://app.codacy.com/gh/Maximus1/Powershell-Video-Transcoder/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
+
 # 🚀 Der ultimative PowerShell Video-Transcoder & Normalizer – Mit Helligkeitsanalyse und CRF-Optimierung! 🚀
 
 **Skript:** [Auto Video Transcode noch schneller mit helligkeitsmessung.ps1](./Auto%20Video%20Transcode%20noch%20schneller%20mit%20helligkeitsmessung.ps1)
