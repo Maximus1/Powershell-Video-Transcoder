@@ -29,7 +29,6 @@ $code = @"
 using System;
 using System.Collections;
 using System.Windows.Forms;
-
 public class EpisodeSorterComparerV2 : IComparer
 {
     public int Column { get; set; }
@@ -40,34 +39,27 @@ public class EpisodeSorterComparerV2 : IComparer
         Column = 0;
         Order = SortOrder.Ascending;
     }
-
     public int Compare(object x, object y)
     {
         ListViewItem itemX = x as ListViewItem;
         ListViewItem itemY = y as ListViewItem;
-
         // Hauptvergleich auf der gewählten Spalte
         int result = CompareItems(itemX, itemY, Column);
-
         // Sekundäre Sortierung: Wenn gleich, dann sortiere nach Code (Spalte 0)
         if (result == 0 && Column != 0)
         {
             result = CompareItems(itemX, itemY, 0);
         }
-
         if (Order == SortOrder.Descending)
         {
             result = -result;
         }
-
         return result;
     }
-
     private int CompareItems(ListViewItem itemX, ListViewItem itemY, int colIndex)
     {
         string textX = itemX.SubItems.Count > colIndex ? itemX.SubItems[colIndex].Text : "";
         string textY = itemY.SubItems.Count > colIndex ? itemY.SubItems[colIndex].Text : "";
-
         double numX, numY;
         if (double.TryParse(textX, out numX) && double.TryParse(textY, out numY))
         {
@@ -82,7 +74,6 @@ public class EpisodeSorterComparerV2 : IComparer
 "@
 # Verhindert Fehler, falls der Typ in der aktuellen Session bereits existiert
 try { Add-Type -TypeDefinition $code -ReferencedAssemblies System.Windows.Forms -ErrorAction Stop } catch {}
-
 
 # Definiert den regulären Ausdruck (Regex) für die Suche nach Serien auf der Webseite 'fernsehserien.de'.
 # Dieser Ausdruck sucht nach dem gesamten HTML-Block für ein einzelnes Suchergebnis.
@@ -242,7 +233,6 @@ function Invoke-SeriesSearch {
                     }
                 }
             }
-
             Write-Host "Suche ergab $($results.Count) Treffer."
             return $results # Gibt die Liste der Ergebnisse für die GUI zurück.
         }
@@ -427,15 +417,15 @@ function Show-EpisodeSelectionGui {
     $listView.View = [System.Windows.Forms.View]::Details # Stellt die Ansicht auf "Details" (mit Spalten).
     $listView.FullRowSelect = $true # Sorgt dafür, dass die ganze Zeile markiert wird.
     $listView.MultiSelect = $false # Erlaubt nur die Auswahl eines Eintrags.
-    
+
     # --- NEU: Sortierung aktivieren ---
     $sorter = New-Object EpisodeSorterComparerV2 # Erstellt den benutzerdefinierten Sorter
     $listView.ListViewItemSorter = $sorter # Weist ihn der ListView zu
-    
+
     # Event-Handler für Spaltenklick
     $listView.add_ColumnClick({
         param($listViewSender, $e)
-        
+
         # Prüfen, ob die gleiche Spalte erneut geklickt wurde
         if ($listViewSender.ListViewItemSorter.Column -eq $e.Column) {
             # Sortierreihenfolge umkehren
@@ -517,9 +507,9 @@ function Import-EpisodeGuide {
     # Sucht alle HTML-Blöcke, die eine Episode repräsentieren (eingeschlossen in '<a>'-Tags mit 'role="row"').
     $episodePattern = '<a role="row".*?</a>' # Definiert das Regex-Muster für einen Episodenblock.
     $episodes = [regex]::Matches($GuideContent, $episodePattern, 'Singleline') # Findet alle Episodenblöcke im HTML.
-    
+
     $parsedList = @()
-    
+
     # Durchläuft jeden gefundenen Episodenblock.
     foreach ($ep in $episodes) { # Schleife über jeden gefundenen Episodenblock.
         $block = $ep.Value # Der HTML-Inhalt des aktuellen Blocks.
@@ -569,25 +559,21 @@ function Get-EpisodeInfo {
     param(
         [Parameter(Mandatory)]
         [array]$EpisodeList,
-
         [Parameter(Mandatory=$false)]
         [int]$AbsoluteEpisodeNumber = -1,
-
         [Parameter(Mandatory)]
         [AllowEmptyString()]
         [string]$EpisodeTitleFromFile,
-
         [Parameter(Mandatory=$false)]
         [string]$SeasonEpisodeCode,
-
         [switch]$ShowAllMatches # NEU: Wenn gesetzt, werden alle Treffer angezeigt, nicht nur die besten 8.
     )
 #
     # Wenn eine negative Episodennummer übergeben wird und kein Code vorhanden ist, bedeutet das, dass wir nur nach dem Titel suchen sollen.
     $searchByTitleOnly = ($AbsoluteEpisodeNumber -lt 0 -and [string]::IsNullOrEmpty($SeasonEpisodeCode))
-    
+
     $potentialMatches = @()
-    
+
     if ($searchByTitleOnly) {
         $potentialMatches = $EpisodeList
     } else {
@@ -597,7 +583,6 @@ function Get-EpisodeInfo {
             $potentialMatches = $EpisodeList | Where-Object { $_.Code -eq $SeasonEpisodeCode }
         }
     }
-
     if ($potentialMatches.Count -eq 0) { # Wenn keine Treffer für die Nummer gefunden wurden...
         return $null # Kein Treffer für die Episodennummer.
     }
@@ -625,19 +610,18 @@ function Get-EpisodeInfo {
 
         $distance = Get-LevenshteinDistance -s $EpisodeTitleFromFile -t $match.Titel # Berechnet die Titelähnlichkeit.
         # Write-Host "    - Vergleiche mit: '$($match.Titel)' (Distanz: $distance)" # Entfernt für Performance.
-        
+
         # Speichert das Match und die Distanz, um späteres Neuberechnen beim Sortieren zu vermeiden.
         $matchesWithDistance += [PSCustomObject]@{ 
             Match    = $match
             Distance = $distance
         }
-
         if ($distance -lt $lowestDistance) { # Wenn die aktuelle Distanz geringer ist als die bisher geringste...
             $lowestDistance = $distance # ...wird sie als neue geringste Distanz gespeichert.
             $bestMatch = $match # ...und der aktuelle Treffer als bester Treffer gespeichert.
         }
     }
-    
+
     if ($bestMatch) {
          Write-Host "    -> Bester Kandidat bisher: '$($bestMatch.Titel)' (Distanz: $lowestDistance)" -ForegroundColor Gray
     }
@@ -707,14 +691,11 @@ function Show-TagSelectionGui {
     $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $form.CancelButton = $cancelButton
     $form.Controls.Add($cancelButton)
-
     $result = $form.ShowDialog()
-
     if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
         # Gibt die ausgewählten (angekreuzten) Elemente zurück.
         return $checkedListBox.CheckedItems
     }
-
     return $null
 }
 
@@ -733,14 +714,12 @@ function Save-LocalSeriesInfo {
         $content += "SeriesName=$SeriesName"
         $content += "GuideUrl=$GuideUrl"
         $content += "[EPISODES]"
-        
         foreach ($ep in $Episodes) {
             # Format: Code|Absolute|Staffel|Episode|Titel
             # Wir verwenden | als Trennzeichen, da es in Dateinamen/Titeln selten vorkommt (und dort bereinigt wird).
             $line = "{0}|{1}|{2}|{3}|{4}" -f $ep.Code, $ep.Absolute, $ep.Staffel, $ep.Episode, $ep.Titel
             $content += $line
         }
-        
         $content | Out-File -FilePath $Path -Encoding utf8 -Force
         Write-Host "Serieninformationen wurden in '$Path' gespeichert." -ForegroundColor Green
     }
@@ -755,12 +734,12 @@ function Get-LocalSeriesInfo {
         [string]$Path,
         [switch]$IncludeUsed
     )
-    
+
     if (-not (Test-Path $Path)) { 
         Write-Host "Keine lokale Serieninfo-Datei gefunden." -ForegroundColor DarkGray
         return $null 
     }
-    
+
     Write-Host "Lese lokale Serieninformationen aus '$Path'..." -ForegroundColor Cyan
     $content = Get-Content $Path -Encoding utf8
     $seriesName = ""
@@ -770,17 +749,15 @@ function Get-LocalSeriesInfo {
 
     foreach ($line in $content) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
-        
+
         if ($line -match "^SeriesName=(.*)") { $seriesName = $matches[1].Trim(); continue }
         if ($line -match "^GuideUrl=(.*)") { $guideUrl = $matches[1].Trim(); continue }
         if ($line -eq "[EPISODES]") { $inEpisodesSection = $true; continue }
-        
+
         if ($inEpisodesSection) {
             $isUsed = $line.StartsWith("*")
             $cleanLine = $line.TrimStart("*")
-            
             if ($isUsed -and -not $IncludeUsed) { continue }
-            
             $parts = $cleanLine -split '\|'
             if ($parts.Count -ge 5) {
                 $episodes += [PSCustomObject]@{
@@ -794,7 +771,6 @@ function Get-LocalSeriesInfo {
             }
         }
     }
-    
     if ($seriesName -ne "") {
         return [PSCustomObject]@{
             SeriesName = $seriesName
@@ -812,25 +788,24 @@ function Update-LocalSeriesInfo {
         [string]$Code,
         [string]$Title
     )
-    
+
     if (-not (Test-Path $Path)) { return }
-    
+
     $content = Get-Content $Path -Encoding utf8
     $newContent = @()
     $inEpisodesSection = $false
-    
+
     foreach ($line in $content) {
         if ($line -eq "[EPISODES]") { 
             $inEpisodesSection = $true
             $newContent += $line
             continue 
         }
-        
+
         if ($inEpisodesSection -and -not [string]::IsNullOrWhiteSpace($line)) {
             # Zeile prüfen: [*]Code|Absolute|Staffel|Episode|Titel
             $cleanLine = $line.TrimStart("*")
             $parts = $cleanLine -split '\|'
-            
             # Wir vergleichen Code und Titel, um sicherzugehen
             if ($parts.Count -ge 5 -and $parts[0] -eq $Code -and $parts[4] -eq $Title) {
                 if (-not $line.StartsWith("*")) {
@@ -845,7 +820,6 @@ function Update-LocalSeriesInfo {
             $newContent += $line
         }
     }
-    
     $newContent | Out-File -FilePath $Path -Encoding utf8 -Force
     Write-Host "Lokaler Status für '$Code' aktualisiert (als verwendet markiert)." -ForegroundColor DarkGray
 }
@@ -890,7 +864,7 @@ function Update-File {
     # 1. Normalisiert die Trennzeichen um das SxxExx-Muster herum, um eine saubere Struktur zu schaffen.
     # Dies behandelt Fälle wie "SerieS01E01Titel" oder "Serie-S01E01-Titel".
     $baseNameMitTrenner = $baseNameOhneGruppe -replace '(\S)(S\d{2}E\d{2})', '$1 - $2' -replace '(S\d{2}E\d{2})(\S)', '$1 - $2' # Fügt Trennzeichen um SxxExx ein.
-    
+
     # Fix für Seriennamen wie "PUR+", wo das Plus direkt am Bindestrich kleben kann ("PUR+-Titel").
     # Wir fügen ein Leerzeichen ein, damit der Trenner als " - " erkannt wird oder zumindest sauber getrennt ist.
     $baseNameMitTrenner = $baseNameMitTrenner -replace '\+-', '+ - ' 
@@ -928,7 +902,7 @@ function Update-File {
     $baseNameFinal = $baseNameFinal.Trim()  # Entfernt führende und nachfolgende Leerzeichen.
     $baseNameFinal = $baseNameFinal | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } # Entfernt leere Teile.
 #
-    
+
     # Ermittle den potenziellen Seriennamen vorab, um zu prüfen, ob ein Wechsel stattgefunden hat.
     # Dies ist wichtig, damit die Tag-GUI auch bei der allerersten Datei einer neuen Serie korrekt angezeigt wird.
     if ($fileNameParts.Count -ge 1) {
@@ -945,16 +919,15 @@ function Update-File {
         }
     }
 
-
     # --- NEU: GUI zur Auswahl zusätzlicher Tags ---
     # Führe die Tag-Auswahl nur einmal pro Serie durch (oder beim ersten Start).
     if (-not $script:cachedSeries.HasCheckedTags) {
         $tagsToRemove = Show-TagSelectionGui -FileNameParts $baseNameFinal # Zeigt die GUI zur Tag-Auswahl an.
         $script:cachedSeries.HasCheckedTags = $true # Merken, dass die Prüfung erfolgt ist.
-        
+
         if ($null -ne $tagsToRemove -and $tagsToRemove.Count -gt 0) {
             Write-Host "Folgende neue Tags werden entfernt und gespeichert: $($tagsToRemove -join ', ')" -ForegroundColor Magenta
-            
+
             # Neue Tags zur Datei hinzufügen (ohne Duplikate)
             $existingCustomTags = if (Test-Path $script:customTagsFile) { Get-Content $script:customTagsFile } else { @() }
             $allCustomTags = ($existingCustomTags + $tagsToRemove) | Select-Object -Unique
@@ -1016,11 +989,11 @@ function Update-File {
         $absoluteEpisodeNumber = -1 # Setzt die Nummer auf -1, um die Titelsuche zu signalisieren.
 
         # --- NEU: Erweiterte Analyse des Titels ---
-        
+
         # 1. Prüfen auf versteckten Code wie "S04 E13" (entstanden aus S04_E13 durch Normalisierung)
         if ($episodeTitleFromFile -match 'S(\d+)\s*E(\d+)') {
             $tempCode = "S{0:00}E{1:00}" -f [int]$matches[1], [int]$matches[2]
-            
+
             # Abfrage nur beim ersten Mal, wenn noch keine Entscheidung getroffen wurde
             if ($null -eq $script:approvedHiddenCodePattern) {
                 $msgResult = [System.Windows.Forms.MessageBox]::Show("Im Titel wurde ein versteckter Episodencode '$tempCode' gefunden.`nSoll dieser für die Identifikation verwendet werden?`n`n(Diese Entscheidung wird für den aktuellen Durchlauf gespeichert)", "Versteckten Code gefunden", "YesNo", "Question")
@@ -1053,11 +1026,11 @@ function Update-File {
         # Cache für die neue Serie zurücksetzen
         # Wenn es eine neue Serie ist, wird eine neue Online-Suche gestartet.
         Write-Host "Neue Serie erkannt: '$seriesNameFromFile'." -ForegroundColor Yellow
-        
+
         # --- NEU: Zuerst lokal suchen ---
         $serienInfoPath = Join-Path $script:selectedPath "Serieninfo.txt"
         $localInfo = $null
-        
+
         if (Test-Path $serienInfoPath) {
             # Prüfen, ob wir im 2. Durchlauf sind und Used includen sollen
             $includeUsed = $script:includeUsedEpisodes -eq $true
@@ -1133,7 +1106,7 @@ function Update-File {
                 return $false
             }
         }
-        
+
         # Parsen des Inhalts, falls noch nicht geschehen
         if ($null -eq $script:cachedSeries.ParsedEpisodes) {
              Write-Host "Parse Episodenguide einmalig für den Cache..." -ForegroundColor Cyan
