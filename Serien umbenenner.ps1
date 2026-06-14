@@ -1,4 +1,4 @@
-﻿# ---------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------
 # Das Serien Umbenenner Tool
 # ---------------------------------------------------------------------------------
 # Dieses Skript automatisiert das Umbenennen von Serien-Dateien durch Online-Abgleich.
@@ -796,7 +796,7 @@ function Update-LocalSeriesInfo {
     $inEpisodesSection = $false
 
     foreach ($line in $content) {
-        if ($line -eq "[EPISODES]") { 
+         if ($line -eq "[EPISODES]") {
             $inEpisodesSection = $true
             $newContent += $line
             continue 
