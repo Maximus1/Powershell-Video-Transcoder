@@ -88,7 +88,7 @@ $regex = '<li class="ep-hover suchergebnisse-sendung">.*?</li>' # Definiert den 
 
 # Definiert den Pfad für die benutzerdefinierten Scene-Tags.
 $customTagsFile = Join-Path -Path $PSScriptRoot -ChildPath "CustomSceneTags.txt"
-
+   
 # Definiert die Standard-Scene-Tags.
 $sceneTags = 'PROPER|REPACK|iNTERNAL|LIMITED|READ\.NFO|UNCUT|UNRATED|REMASTERED|COMPLETE|SUBBED|DUBBED' # Allgemeine Tags
 $sceneTags += '|German|Ger|English|Eng|DL|ML|Multi' # Sprache

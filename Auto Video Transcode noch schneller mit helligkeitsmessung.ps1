@@ -1879,6 +1879,7 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
         if ($previousIgnoreFile -and (Test-Path $previousIgnoreFile)) {
             Remove-Item -Path $previousIgnoreFile -Force -ErrorAction SilentlyContinue
         }
+        
 
         # Erstelle .embyignore-Datei fuer aktuelle Datei
         $ignoreFile = Join-Path (Get-Item -LiteralPath $file).DirectoryName ".embyignore"

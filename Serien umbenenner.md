@@ -12,7 +12,7 @@ Dieses PowerShell-Skript automatisiert das Umbenennen von Videodateien (Serien),
   * Auswahl von zu entfernenden "Scene-Tags" (z.B. *GERMAN*, *DUBBED*).
 
 * **Lokaler Cache & Historie:** Speichert geladene Serieninfos in einer `Serieninfo.txt` im Zielordner, um wiederholte Web-Abfragen zu vermeiden und bereits zugeordnete Episoden zu markieren.
-
+   
 * **Zwei-Phasen-Verarbeitung**:
   1. **Durchlauf 1:** Versucht eine schnelle Zuordnung (Top 8 Treffer).
   2. **Durchlauf 2 (Retry):** Versucht bei fehlgeschlagenen Dateien eine erweiterte Suche (alle Treffer) und fragt optional ab, ob bereits vergebene Episoden erneut genutzt werden dürfen.
