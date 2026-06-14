@@ -1136,68 +1136,68 @@ function Set-VolumeGain {
         $lastOutputTime = Get-Date
         $hangTimeoutSeconds = 300 # 5 Minuten Timeout
         $readTask = $process.StandardError.ReadLineAsync()
-```
 
-            # Echtzeit-Verarbeitung der FFmpeg-Ausgabe zur Restzeitberechnung
-            while (-not $process.HasExited) {
-                # Pruefen ob neue Daten vom Prozess verfuegbar sind (non-blocking)
-                if ($readTask.IsCompleted) {
-                    $line = $readTask.Result
+        # Echtzeit-Verarbeitung der FFmpeg-Ausgabe zur Restzeitberechnung
+        while (-not $process.HasExited) {
+            # Pruefen ob neue Daten vom Prozess verfuegbar sind (non-blocking)
+            if ($readTask.IsCompleted) {
+                $line = $readTask.Result
 
-                    if ($null -ne $line) {
-                        $lastOutputTime = Get-Date # Zeitstempel aktualisieren bei Aktivitaet
+                if ($null -ne $line) {
+                    $lastOutputTime = Get-Date # Zeitstempel aktualisieren bei Aktivitaet
 
-                        if ($line -like "frame=*") {
-                            # Extrahiere verarbeitete Frames und aktuelle Kodier-FPS
-                            $progressMatch = [regex]::Match($line, "frame=\s*(\d+)\s+fps=\s*([\d\.]+)")
-                            if ($progressMatch.Success) {
-                                $processedFrames = [int64]$progressMatch.Groups[1].Value
-                                $currentFps = [double]$progressMatch.Groups[2].Value.Replace('.', ',')
+                    if ($line -like "frame=*") {
+                        # Extrahiere verarbeitete Frames und aktuelle Kodier-FPS
+                        $progressMatch = [regex]::Match($line, "frame=\s*(\d+)\s+fps=\s*([\d\.]+)")
+                        if ($progressMatch.Success) {
+                            $processedFrames = [int64]$progressMatch.Groups[1].Value
+                            $currentFps = [double]$progressMatch.Groups[2].Value.Replace('.', ',')
 
-                                if ($currentFps -gt 0 -and $totalFrames -gt 0 -and $processedFrames -le $totalFrames) {
-                                    $remainingFrames = $totalFrames - $processedFrames
-                                    $remainingExecutionSeconds = $remainingFrames / $currentFps
-                                    $remainingTimeSpan = [TimeSpan]::FromSeconds($remainingExecutionSeconds)
-                                    $percentComplete = ($processedFrames / $totalFrames) * 100
+                            if ($currentFps -gt 0 -and $totalFrames -gt 0 -and $processedFrames -le $totalFrames) {
+                                $remainingFrames = $totalFrames - $processedFrames
+                                $remainingExecutionSeconds = $remainingFrames / $currentFps
+                                $remainingTimeSpan = [TimeSpan]::FromSeconds($remainingExecutionSeconds)
+                                $percentComplete = ($processedFrames / $totalFrames) * 100
 
-                                    # Stelle sicher, dass der Prozentsatz nicht ueber 100 geht
-                                    if ($percentComplete -gt 100) { $percentComplete = 100.0 }
+                                # Stelle sicher, dass der Prozentsatz nicht ueber 100 geht
+                                if ($percentComplete -gt 100) { $percentComplete = 100.0 }
 
-                                    # Aktuelle Dateigroesse abrufen und formatieren
-                                    $currentSizeMB = 0
-                                    if (Test-Path -LiteralPath $outputFile) {
-                                        # ErrorAction SilentlyContinue, falls die Datei gerade geschrieben wird und gesperrt ist
-                                        $currentSizeMB = (Get-Item -LiteralPath $outputFile -ErrorAction SilentlyContinue).Length / 1MB
-                                    }
-                                    $progressText = "Fortschritt: {0:N2}% | Verbleibend: {1:hh\h\:mm\m\:ss\s} | FPS: {2:N0} | Größe: {3:N2} MB" -f $percentComplete, $remainingTimeSpan, $currentFps, $currentSizeMB
-                                    Write-Host "`r$progressText" -NoNewline -ForegroundColor Gray
+                                # Aktuelle Dateigroesse abrufen und formatieren
+                                $currentSizeMB = 0
+                                if (Test-Path -LiteralPath $outputFile) {
+                                    # ErrorAction SilentlyContinue, falls die Datei gerade geschrieben wird und gesperrt ist
+                                    $currentSizeMB = (Get-Item -LiteralPath $outputFile -ErrorAction SilentlyContinue).Length / 1MB
                                 }
+                                $progressText = "Fortschritt: {0:N2}% | Verbleibend: {1:hh\h\:mm\m\:ss\s} | FPS: {2:N0} | Größe: {3:N2} MB" -f $percentComplete, $remainingTimeSpan, $currentFps, $currentSizeMB
+                                Write-Host "`r$progressText" -NoNewline -ForegroundColor Gray
                             }
                         }
-                        # Naechste Zeile asynchron lesen
-                        $readTask = $process.StandardError.ReadLineAsync()
                     }
+                    # Naechste Zeile asynchron lesen
+                    $readTask = $process.StandardError.ReadLineAsync()
                 }
-
-                # Hang-Detection: Pruefen ob Timeout ueberschritten
-                if (((Get-Date) - $lastOutputTime).TotalSeconds -gt $hangTimeoutSeconds) {
-                    $process.Kill()
-                    Write-Host "`nFEHLER: FFmpeg-Prozess reagiert seit $hangTimeoutSeconds Sekunden nicht mehr. Prozess wurde beendet." -ForegroundColor Red
-                    throw "FFmpeg-Prozess haengt (Timeout)."
-                }
-
-                # Kurze Pause um CPU-Last niedrig zu halten waehrend wir warten
-                Start-Sleep -Milliseconds 50
             }
 
-            # Sorgt fuer einen sauberen Zeilenumbruch nach der einzeiligen Fortschrittsanzeige.
-            Write-Host ""
+            # Hang-Detection: Pruefen ob Timeout ueberschritten
+            if (((Get-Date) - $lastOutputTime).TotalSeconds -gt $hangTimeoutSeconds) {
+                $process.Kill()
+                Write-Host "`nFEHLER: FFmpeg-Prozess reagiert seit $hangTimeoutSeconds Sekunden nicht mehr. Prozess wurde beendet." -ForegroundColor Red
+                throw "FFmpeg-Prozess haengt (Timeout)."
+            }
 
-            $process.WaitForExit()
+            # Kurze Pause um CPU-Last niedrig zu halten waehrend wir warten
+            Start-Sleep -Milliseconds 50
+        }
 
-            # Wächter aufräumen
-            if ($watcherJob.State -eq 'Running') { Stop-Job $watcherJob }
-            Remove-Job $watcherJob
+        # Sorgt fuer einen sauberen Zeilenumbruch nach der einzeiligen Fortschrittsanzeige.
+        Write-Host ""
+
+        $process.WaitForExit()
+
+        # Wächter aufräumen
+        if ($watcherJob.State -eq 'Running') { Stop-Job $watcherJob }
+        Remove-Job $watcherJob
+```
 
             $remainingErrors = $process.StandardError.ReadToEnd()
             if ($remainingErrors) {
