@@ -88,7 +88,7 @@ $regex = '<li class="ep-hover suchergebnisse-sendung">.*?</li>' # Definiert den 
 
 # Definiert den Pfad für die benutzerdefinierten Scene-Tags.
 $customTagsFile = Join-Path -Path $PSScriptRoot -ChildPath "CustomSceneTags.txt"
-   
+
 # Definiert die Standard-Scene-Tags.
 $sceneTags = 'PROPER|REPACK|iNTERNAL|LIMITED|READ\.NFO|UNCUT|UNRATED|REMASTERED|COMPLETE|SUBBED|DUBBED' # Allgemeine Tags
 $sceneTags += '|German|Ger|English|Eng|DL|ML|Multi' # Sprache
@@ -212,7 +212,7 @@ function Invoke-SeriesSearch {
                 $block = $match.Value # Der HTML-Block eines einzelnen Treffers.
                 $titleMatch = [regex]::Match($block, 'title="([^"]+)"') # Extrahiert den Titel der Serie.
                 $urlMatch = [regex]::Match($block, 'href="([^"]+)"') # Extrahiert die relative URL der Serie.
-                $results += [pscustomobject]@{ 
+                $results += [pscustomobject]@{
                     Title    = $titleMatch.Groups[1].Value # Speichert den Titel im Ergebnisobjekt.
                     Url      = "https://www.fernsehserien.de" + $urlMatch.Groups[1].Value # Baut die absolute URL zusammen.
                     ImageUrl = Get-SeriesImageUrl -HtmlContent $block # Ruft die Funktion auf, um die Bild-URL zu extrahieren.
@@ -228,7 +228,7 @@ function Invoke-SeriesSearch {
                 for ($i = $nameParts.Length - 1; $i -ge 1; $i--) {
                     $shortSeriesName = $nameParts[0..($i-1)] -join ' '
                     Write-Host "Keine Treffer. Versuche Fallback-Suche mit '$shortSeriesName'..." -ForegroundColor Yellow
-#                    
+
                     # Rufe die Funktion rekursiv mit dem kürzeren Namen auf.
                     $fallbackResult = Invoke-SeriesSearch -SeriesName $shortSeriesName
                     # Wenn die Fallback-Suche erfolgreich war (Ergebnisse gefunden), gib das Ergebnis zurück und beende die Schleife.
@@ -547,7 +547,7 @@ function Import-EpisodeGuide {
             $epAbs = [int]$matches[1] # Extrahiert die absolute Nummer.
         }
 #
-        $parsedList += [PSCustomObject]@{ 
+        $parsedList += [PSCustomObject]@{
             Absolute = $epAbs # Speichert die absolute Nummer.
             Staffel  = $st # Speichert die Staffelnummer.
             Episode  = $epNum # Speichert die Episodennummer.
@@ -616,7 +616,7 @@ function Get-EpisodeInfo {
         # Write-Host "    - Vergleiche mit: '$($match.Titel)' (Distanz: $distance)" # Entfernt für Performance.
 
         # Speichert das Match und die Distanz, um späteres Neuberechnen beim Sortieren zu vermeiden.
-        $matchesWithDistance += [PSCustomObject]@{ 
+        $matchesWithDistance += [PSCustomObject]@{
             Match    = $match
             Distance = $distance
         }
@@ -644,7 +644,7 @@ function Get-EpisodeInfo {
         if ($searchByTitleOnly -and -not $ShowAllMatches) { # NEU: Prüfung auf ShowAllMatches
             Write-Host "  -> Reduziere die Liste auf die 8 besten Treffer."
             # Sortiert basierend auf der bereits berechneten Distanz (viel schneller).
-            $sortedMatches = $matchesWithDistance | Sort-Object Distance 
+            $sortedMatches = $matchesWithDistance | Sort-Object Distance
             # Extrahiere die originalen Match-Objekte und nimmt die besten 8.
             $potentialMatches = $sortedMatches | Select-Object -First 8 | ForEach-Object { $_.Match }
         }
@@ -739,9 +739,9 @@ function Get-LocalSeriesInfo {
         [switch]$IncludeUsed
     )
 
-    if (-not (Test-Path $Path)) { 
+    if (-not (Test-Path $Path)) {
         Write-Host "Keine lokale Serieninfo-Datei gefunden." -ForegroundColor DarkGray
-        return $null 
+        return $null
     }
 
     Write-Host "Lese lokale Serieninformationen aus '$Path'..." -ForegroundColor Cyan
@@ -804,7 +804,7 @@ function Update-LocalSeriesInfo {
         if ($line -eq "[EPISODES]") {
             $inEpisodesSection = $true
             $newContent += $line
-            continue 
+            continue
         }
 
         if ($inEpisodesSection -and -not [string]::IsNullOrWhiteSpace($line)) {
@@ -837,7 +837,7 @@ function Update-File {
     param (
         [Parameter(Mandatory)]
         $file,
-        
+
         [switch]
         $ShowAllMatches
     )
@@ -876,7 +876,7 @@ function Update-File {
 
     # Fix für Seriennamen wie "PUR+", wo das Plus direkt am Bindestrich kleben kann ("PUR+-Titel").
     # Wir fügen ein Leerzeichen ein, damit der Trenner als " - " erkannt wird oder zumindest sauber getrennt ist.
-    $baseNameMitTrenner = $baseNameMitTrenner -replace '\+-', '+ - ' 
+    $baseNameMitTrenner = $baseNameMitTrenner -replace '\+-', '+ - '
 #
     # 2. Ersetzt alle restlichen Punkte und Unterstriche durch Leerzeichen.
     $baseNameOhnePunkte = $baseNameMitTrenner -replace '[\._]', ' ' # Ersetzt Punkte und Unterstriche durch Leerzeichen.
@@ -891,7 +891,7 @@ function Update-File {
     # Teilt den normalisierten Namen am Trennzeichen ' - ' auf, um die einzelnen Teile zu erhalten.
     $fileNameParts = $baseNameOhnePunkte -split ' - ' # Teilt den Namen in seine Bestandteile auf.
 
-    # Fallback: Wenn kein Standard-Trenner ' - ' gefunden wurde, versuchen wir am ersten Bindestrich zu trennen, 
+    # Fallback: Wenn kein Standard-Trenner ' - ' gefunden wurde, versuchen wir am ersten Bindestrich zu trennen,
     # falls der Name lang genug ist und keine SxxExx-Struktur hat.
     if ($fileNameParts.Count -lt 2 -and $baseNameOhnePunkte -match '^[^-]+-.+$' -and $baseNameOhnePunkte -notmatch 'S\d{2}E\d{2}') {
         $firstDashIndex = $baseNameOhnePunkte.IndexOf('-')
@@ -1053,8 +1053,8 @@ function Update-File {
             $script:cachedSeries.EpisodeGuideUrl = $localInfo.GuideUrl
             $script:cachedSeries.ParsedEpisodes = $localInfo.Episodes
             # Content brauchen wir nicht laden, da wir die Episoden schon haben
-            $script:cachedSeries.EpisodeGuideContent = "LOADED_FROM_FILE" 
-        } 
+            $script:cachedSeries.EpisodeGuideContent = "LOADED_FROM_FILE"
+        }
         else {
             Write-Host "Suche online nach Episodenführer..." -ForegroundColor Yellow
             # Zugriff auf globalen Regex
@@ -1120,7 +1120,7 @@ function Update-File {
         if ($null -eq $script:cachedSeries.ParsedEpisodes) {
              Write-Host "Parse Episodenguide einmalig für den Cache..." -ForegroundColor Cyan
              $script:cachedSeries.ParsedEpisodes = Import-EpisodeGuide -GuideContent $script:cachedSeries.EpisodeGuideContent
-             
+
              # --- NEU: Nach dem Parsen in Datei speichern ---
              $serienInfoPath = Join-Path $script:selectedPath "Serieninfo.txt"
              Save-LocalSeriesInfo -Path $serienInfoPath -SeriesName $script:cachedSeries.SelectedSeries.Title -GuideUrl $script:cachedSeries.EpisodeGuideUrl -Episodes $script:cachedSeries.ParsedEpisodes
@@ -1128,7 +1128,7 @@ function Update-File {
 
         # Ruft die spezifischen Informationen für die aktuelle Episode ab.
         # NEU: Übergabe von ShowAllMatches
-        $episodeInfo = Get-EpisodeInfo -EpisodeList $script:cachedSeries.ParsedEpisodes -AbsoluteEpisodeNumber $absoluteEpisodeNumber -EpisodeTitleFromFile $episodeTitleFromFile -SeasonEpisodeCode $detectedCode -ShowAllMatches:$ShowAllMatches 
+        $episodeInfo = Get-EpisodeInfo -EpisodeList $script:cachedSeries.ParsedEpisodes -AbsoluteEpisodeNumber $absoluteEpisodeNumber -EpisodeTitleFromFile $episodeTitleFromFile -SeasonEpisodeCode $detectedCode -ShowAllMatches:$ShowAllMatches
     }
     else {
         Write-Host "Kein Episodenführer für diese Serie verfügbar. Datei wird übersprungen." -ForegroundColor Red # Gibt eine Warnung aus, wenn kein Episodenführer gefunden wurde.
@@ -1164,14 +1164,14 @@ function Update-File {
     if ($PSCmdlet.ShouldProcess($file.FullName, "Rename to $newName")) {
         try {
             Rename-Item -Path $file.FullName -NewName $newName -ErrorAction Stop # Benennt die Datei um.
-            
+
             # --- NEU: Entferne die verwendete Episode aus der Liste, damit sie nicht doppelt vergeben wird ---
             if ($null -ne $episodeInfo -and $null -ne $script:cachedSeries.ParsedEpisodes) {
-                $script:cachedSeries.ParsedEpisodes = $script:cachedSeries.ParsedEpisodes | Where-Object { 
-                    $_.Code -ne $episodeInfo.Code -or $_.Titel -ne $episodeInfo.Titel -or $_.Absolute -ne $episodeInfo.Absolute 
+                $script:cachedSeries.ParsedEpisodes = $script:cachedSeries.ParsedEpisodes | Where-Object {
+                    $_.Code -ne $episodeInfo.Code -or $_.Titel -ne $episodeInfo.Titel -or $_.Absolute -ne $episodeInfo.Absolute
                 }
                 Write-Host "Episode '$($episodeInfo.Code) - $($episodeInfo.Titel)' aus der Liste der verfügbaren Episoden entfernt." -ForegroundColor Gray
-                
+
                 # --- NEU: In Datei als verwendet markieren ---
                 $serienInfoPath = Join-Path $script:selectedPath "Serieninfo.txt"
                 Update-LocalSeriesInfo -Path $serienInfoPath -Code $episodeInfo.Code -Title $episodeInfo.Titel
@@ -1223,7 +1223,7 @@ $retryFiles = @()
 Write-Host "=== Start 1. Durchlauf (Top 8 Treffer) ===" -ForegroundColor Cyan
 foreach ($file in $files) { # Startet die Schleife für jede gefundene Datei.
     $success = Update-File -File $file -ShowAllMatches:$false
-    
+
     if (-not $success) {
         $retryFiles += $file
     }
@@ -1239,7 +1239,7 @@ if ($retryFiles.Count -gt 0) {
     if ($msgResult -eq "Yes") {
         $script:includeUsedEpisodes = $true
         # Cache leeren, damit beim nächsten Update-File die Datei neu geladen wird (mit * Einträgen)
-        $script:cachedSeries.Name = "" 
+        $script:cachedSeries.Name = ""
         $script:cachedSeries.ParsedEpisodes = $null
         Write-Host "Bereits verwendete Episoden werden nun einbezogen." -ForegroundColor Magenta
     }

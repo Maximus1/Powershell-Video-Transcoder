@@ -1107,28 +1107,36 @@ function Set-VolumeGain {
         Write-Host "FFmpeg-Argumente: $($ffmpegArguments -join ' ')" -ForegroundColor DarkCyan
         "`n==== FFmpeg-Argumente: $($ffmpegArguments -join ' ') ====" | Add-Content -LiteralPath $logDatei
 
-        try {
-            # Startet den FFmpeg-Prozess und implementiert eine Fortschrittsanzeige.
-            $processInfo = New-Object System.Diagnostics.ProcessStartInfo
-            $processInfo.FileName = $ffmpegPath
-            $processInfo.Arguments = $ffmpegArguments -join ' '
-            $processInfo.RedirectStandardError = $true
-            $processInfo.UseShellExecute = $false
-            $processInfo.CreateNoWindow = $true
+    try {
+        # Startet den FFmpeg-Prozess und implementiert eine Fortschrittsanzeige.
+        $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $processInfo.FileName = $ffmpegPath
+        $processInfo.Arguments = $ffmpegArguments -join ' '
+        $processInfo.RedirectStandardError = $true
+        $processInfo.UseShellExecute = $false
+        $processInfo.CreateNoWindow = $true
 
-            $process = New-Object System.Diagnostics.Process
-            $process.StartInfo = $processInfo
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $processInfo
 
-            $process.Start() | Out-Null
+        $process.Start() | Out-Null
 
-            # Berechnet die Gesamtzahl der Frames fuer eine robustere Fortschrittsanzeige.
-            Write-Host "Starte Fortschrittsanzeige fuer CPU-Encoding..." -ForegroundColor Cyan
-            $totalFrames = [math]::Round($sourceInfo.Duration1 * $sourceInfo.FPS)
+        # Berechnet die Gesamtzahl der Frames fuer eine robustere Fortschrittsanzeige.
+        Write-Host "Starte Fortschrittsanzeige fuer Encoding..." -ForegroundColor Cyan
+        $totalFrames = [math]::Round($sourceInfo.Duration1 * $sourceInfo.FPS)
 
-            # Timeout-Initialisierung fuer Hang-Detection
-            $lastOutputTime = Get-Date
-            $hangTimeoutSeconds = 300 # 5 Minuten Timeout
-            $readTask = $process.StandardError.ReadLineAsync()
+        # Wächter starten (Modus 3 für Haupt-Encoding mit Frame-Auswertung)
+        Write-Host "  -> Starte Watcher-Job fuer PID: $($process.Id) (Modus: 3)" -ForegroundColor DarkGray
+        $watcherJob = Start-Job -ScriptBlock {
+            param($p, $m)
+            Watch-FFmpegProcess -Process $p -Mode $m
+        } -ArgumentList $process, '3'
+
+        # Timeout-Initialisierung fuer Hang-Detection
+        $lastOutputTime = Get-Date
+        $hangTimeoutSeconds = 300 # 5 Minuten Timeout
+        $readTask = $process.StandardError.ReadLineAsync()
+```
 
             # Echtzeit-Verarbeitung der FFmpeg-Ausgabe zur Restzeitberechnung
             while (-not $process.HasExited) {
@@ -1187,6 +1195,10 @@ function Set-VolumeGain {
 
             $process.WaitForExit()
 
+            # Wächter aufräumen
+            if ($watcherJob.State -eq 'Running') { Stop-Job $watcherJob }
+            Remove-Job $watcherJob
+
             $remainingErrors = $process.StandardError.ReadToEnd()
             if ($remainingErrors) {
                 $allErrors += $remainingErrors.Split([System.Environment]::NewLine)
@@ -1210,6 +1222,7 @@ function Set-VolumeGain {
             "`n==== Fehler bei GPU-Encoding: `n$_ ====" | Add-Content -LiteralPath $logDatei
             Write-Host "Versuche CPU encoding (libx265)..." -ForegroundColor Yellow
             "`n==== Versuche CPU encoding (libx265)... ====" | Add-Content -LiteralPath $logDatei
+```
 
             # Baue die Argumente komplett neu auf, um Fehler in der Reihenfolge zu vermeiden
             $newArgs = @(
@@ -1879,7 +1892,7 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
         if ($previousIgnoreFile -and (Test-Path $previousIgnoreFile)) {
             Remove-Item -Path $previousIgnoreFile -Force -ErrorAction SilentlyContinue
         }
-        
+
 
         # Erstelle .embyignore-Datei fuer aktuelle Datei
         $ignoreFile = Join-Path (Get-Item -LiteralPath $file).DirectoryName ".embyignore"
