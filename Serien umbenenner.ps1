@@ -767,7 +767,7 @@ function Get-LocalSeriesInfo {
     $guideUrl = ""
     $episodes = @()
     $inEpisodesSection = $false
-    
+
     foreach ($line in $content) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         
@@ -1249,7 +1249,7 @@ foreach ($file in $files) { # Startet die Schleife für jede gefundene Datei.
 if ($retryFiles.Count -gt 0) {
     Write-Host "`n=== Start 2. Durchlauf (Alle Treffer anzeigen) ===" -ForegroundColor Cyan
     Write-Host "Es werden $($retryFiles.Count) Dateien erneut verarbeitet..." -ForegroundColor Yellow
-    
+
     # --- NEU: Popup Abfrage ---
     $msgResult = [System.Windows.Forms.MessageBox]::Show("Sollen im zweiten Durchlauf auch bereits als 'gefunden' markierte Episoden (aus Serieninfo.txt) wiederverwendet werden?", "Erweiterte Suche", "YesNo", "Question")
     if ($msgResult -eq "Yes") {
@@ -1259,10 +1259,10 @@ if ($retryFiles.Count -gt 0) {
         $script:cachedSeries.ParsedEpisodes = $null
         Write-Host "Bereits verwendete Episoden werden nun einbezogen." -ForegroundColor Magenta
     }
-    
+
     # Warte kurz, damit der Benutzer die Meldung sieht
     Start-Sleep -Seconds 2
-    
+
     foreach ($file in $retryFiles) {
         # Prüfen, ob die Datei noch existiert (könnte manuell geändert worden sein)
         if (Test-Path $file.FullName) {
