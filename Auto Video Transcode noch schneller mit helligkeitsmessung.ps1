@@ -1643,10 +1643,9 @@ function Test-FileIntegrity {
     )
 
     # Pruefung der Ausgabedatei
-    $outputResult = Invoke-IntegrityCheck -FilePath $outputFile -CheckType "Ausgabe" -SourceInfo $sourceInfo
-    # Bereinige die Fehlerausgabe von reinen Fortschrittsanzeigen, bevor sie geprueft wird.
-    $filteredErrorOutput = $outputResult.ErrorOutput -split [System.Environment]::NewLine | Where-Object { $_ -notlike "frame=*" } | Out-String
-    $isOutputOk = ($outputResult.ExitCode -eq 0 -and [string]::IsNullOrWhiteSpace($filteredErrorOutput)) -or ($outputResult.ErrorOutput -match "Application provided invalid, non monotonically increasing dts to muxer in stream 0")
+$outputResult = Invoke-IntegrityCheck -FilePath $outputFile -ffmpegPath $ffmpegPath -CheckType "Ausgabe" -SourceInfo $sourceInfo
+    # Die Auswertung erfolgt ueber die Eigenschaft IsValid
+    $isOutputOk = $outputResult.IsValid
 
     if ($isOutputOk) {
         Write-Host "OK: $outputFile" -ForegroundColor Green
@@ -1662,10 +1661,8 @@ function Test-FileIntegrity {
         Add-Content -LiteralPath $logDatei -Value "----------------------------------------"
 
         # Pruefung der Quelldatei
-        $sourceResult = Invoke-IntegrityCheck -FilePath $file -CheckType "Quelle" -SourceInfo $sourceInfo
-        # Bereinige auch hier die Fehlerausgabe.
-        $filteredSourceErrorOutput = $sourceResult.ErrorOutput -split [System.Environment]::NewLine | Where-Object { $_ -notlike "frame=*" } | Out-String
-        $isSourceOk = ($sourceResult.ExitCode -eq 0 -and [string]::IsNullOrWhiteSpace($filteredSourceErrorOutput)) -or ($sourceResult.ErrorOutput -match "Application provided invalid, non monotonically increasing dts to muxer in stream 0")
+        $sourceResult = Invoke-IntegrityCheck -FilePath $file -ffmpegPath $ffmpegPath -CheckType "Quelle" -SourceInfo $sourceInfo
+        $isSourceOk = $sourceResult.IsValid
 
         if ($isSourceOk) {
             # Quelle ist OK, aber Ausgabe fehlerhaft -> Fehler im Transcoding. Ausgabedatei wird geloescht.
