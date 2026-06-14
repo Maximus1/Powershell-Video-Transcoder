@@ -73,7 +73,11 @@ public class EpisodeSorterComparerV2 : IComparer
 }
 "@
 # Verhindert Fehler, falls der Typ in der aktuellen Session bereits existiert
-try { Add-Type -TypeDefinition $code -ReferencedAssemblies System.Windows.Forms -ErrorAction Stop } catch {}
+try {
+    Add-Type -TypeDefinition $code -ReferencedAssemblies System.Windows.Forms -ErrorAction Stop
+} catch {
+    Write-Verbose "Type 'EpisodeSorterComparerV2' already exists in current session."
+}
 
 # Definiert den regulären Ausdruck (Regex) für die Suche nach Serien auf der Webseite 'fernsehserien.de'.
 # Dieser Ausdruck sucht nach dem gesamten HTML-Block für ein einzelnes Suchergebnis.
@@ -783,6 +787,7 @@ function Get-LocalSeriesInfo {
 
 # Markiert eine Episode in der lokalen Datei als verwendet (fügt * hinzu).
 function Update-LocalSeriesInfo {
+    [CmdletBinding(SupportsShouldProcess)]
     param (
         [string]$Path,
         [string]$Code,
@@ -796,7 +801,7 @@ function Update-LocalSeriesInfo {
     $inEpisodesSection = $false
 
     foreach ($line in $content) {
-         if ($line -eq "[EPISODES]") {
+        if ($line -eq "[EPISODES]") {
             $inEpisodesSection = $true
             $newContent += $line
             continue 
@@ -826,11 +831,13 @@ function Update-LocalSeriesInfo {
 
 # --- NEU: Gekapselte Funktion für die Verarbeitung einer einzelnen Datei ---
 function Update-File {
-    param(
+    [CmdletBinding(SupportsShouldProcess)]
+    param (
         [Parameter(Mandatory)]
         $file,
         
-        [switch]$ShowAllMatches
+        [switch]
+        $ShowAllMatches
     )
 
     $detectedCode = $null # Variable für zusätzlich gefundenen Code initialisieren
