@@ -825,8 +825,10 @@ function Update-LocalSeriesInfo {
             $newContent += $line
         }
     }
-    $newContent | Out-File -FilePath $Path -Encoding utf8 -Force
-    Write-Host "Lokaler Status für '$Code' aktualisiert (als verwendet markiert)." -ForegroundColor DarkGray
+    if ($PSCmdlet.ShouldProcess($Path, "Update episode status")) {
+        $newContent | Out-File -FilePath $Path -Encoding utf8 -Force
+        Write-Host "Lokaler Status für '$Code' aktualisiert (als verwendet markiert)." -ForegroundColor DarkGray
+    }
 }
 
 # --- NEU: Gekapselte Funktion für die Verarbeitung einer einzelnen Datei ---
@@ -1159,25 +1161,27 @@ function Update-File {
         return $false # Signalisiert: Nicht erfolgreich / Abbruch
     }
     # Versucht, die Datei umzubenennen.
-    try {
-        Rename-Item -Path $file.FullName -NewName $newName -ErrorAction Stop # Benennt die Datei um.
-        
-        # --- NEU: Entferne die verwendete Episode aus der Liste, damit sie nicht doppelt vergeben wird ---
-        if ($null -ne $episodeInfo -and $null -ne $script:cachedSeries.ParsedEpisodes) {
-            $script:cachedSeries.ParsedEpisodes = $script:cachedSeries.ParsedEpisodes | Where-Object { 
-                $_.Code -ne $episodeInfo.Code -or $_.Titel -ne $episodeInfo.Titel -or $_.Absolute -ne $episodeInfo.Absolute 
-            }
-            Write-Host "Episode '$($episodeInfo.Code) - $($episodeInfo.Titel)' aus der Liste der verfügbaren Episoden entfernt." -ForegroundColor Gray
+    if ($PSCmdlet.ShouldProcess($file.FullName, "Rename to $newName")) {
+        try {
+            Rename-Item -Path $file.FullName -NewName $newName -ErrorAction Stop # Benennt die Datei um.
             
-            # --- NEU: In Datei als verwendet markieren ---
-            $serienInfoPath = Join-Path $script:selectedPath "Serieninfo.txt"
-            Update-LocalSeriesInfo -Path $serienInfoPath -Code $episodeInfo.Code -Title $episodeInfo.Titel
+            # --- NEU: Entferne die verwendete Episode aus der Liste, damit sie nicht doppelt vergeben wird ---
+            if ($null -ne $episodeInfo -and $null -ne $script:cachedSeries.ParsedEpisodes) {
+                $script:cachedSeries.ParsedEpisodes = $script:cachedSeries.ParsedEpisodes | Where-Object { 
+                    $_.Code -ne $episodeInfo.Code -or $_.Titel -ne $episodeInfo.Titel -or $_.Absolute -ne $episodeInfo.Absolute 
+                }
+                Write-Host "Episode '$($episodeInfo.Code) - $($episodeInfo.Titel)' aus der Liste der verfügbaren Episoden entfernt." -ForegroundColor Gray
+                
+                # --- NEU: In Datei als verwendet markieren ---
+                $serienInfoPath = Join-Path $script:selectedPath "Serieninfo.txt"
+                Update-LocalSeriesInfo -Path $serienInfoPath -Code $episodeInfo.Code -Title $episodeInfo.Titel
+            }
+            return $true # Erfolg
         }
-        return $true # Erfolg
-    }
-    catch {
-        Write-Error "Fehler beim Umbenennen der Datei: $($_.Exception.Message)" # Gibt einen Fehler aus, falls das Umbenennen fehlschlägt.
-        return $false # Fehler beim Umbenennen -> Retry?
+        catch {
+            Write-Error "Fehler beim Umbenennen der Datei: $($_.Exception.Message)" # Gibt einen Fehler aus, falls das Umbenennen fehlschlägt.
+            return $false # Fehler beim Umbenennen -> Retry?
+        }
     }
 }
 #endregion
