@@ -39,7 +39,9 @@ Wenn du permanent eigene Tags aus Dateinamen entfernen möchtest (z.B. spezielle
 1. **Starten:** Führe das Skript `Serien umbenenner.ps1` aus (Rechtsklick -> "Mit PowerShell ausführen").
 2. **Ordnerwahl:** Ein Dialogfenster öffnet sich. Wähle den Ordner aus, in dem sich die Videodateien (`.mkv`, `.mp4`) befinden.
 3. **Tag-Bereinigung:** Beim ersten Start oder bei neuen Serien fragt das Skript via GUI, ob bestimmte Teile des Dateinamens als "Tags" erkannt und entfernt werden sollen. Wähle hier unerwünschte Namensbestandteile aus.
-4. **Verarbeitung**:
+
+4. **Verarbeitung:**
+
   * Das Skript analysiert jede Datei.
   * Bei Unsicherheiten (welche Serie? welche Episode?) öffnet sich ein Fenster, in dem du die richtige Auswahl treffen kannst.
   * Die Dateien werden automatisch umbenannt.
