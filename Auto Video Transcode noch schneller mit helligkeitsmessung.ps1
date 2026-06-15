@@ -310,26 +310,38 @@ function Get-FFmpegOutput {
     $proc.StartInfo = $startInfo
     $proc.Start() | Out-Null
 
-    # Asynchroner Start des Watchers im Hintergrund
-    Write-Host "  -> Starte Watcher-Job fuer PID: $($proc.Id) (Modus: 1B)" -ForegroundColor DarkGray
+    $outputBuilder = New-Object System.Text.StringBuilder
+    $lastOutputTime = Get-Date
+    $hangTimeoutSeconds = 120
+    $readTask = $proc.StandardError.ReadLineAsync()
 
-    $watcherJob = Start-Job -ScriptBlock {
-        param($p, $m)
-        # Kurze Bestätigung innerhalb des Jobs
-        Write-Host "  -> Watcher aktiv fuer PID: $($p.Id)" -ForegroundColor DarkGray
-        Watch-FFmpegProcess -Process $p -Mode $m
-    } -ArgumentList $proc, '1B'
+    while (-not $proc.HasExited) {
+        if ($readTask.IsCompleted) {
+            $line = $readTask.Result
+            if ($null -ne $line) {
+                $lastOutputTime = Get-Date
+                [void]$outputBuilder.AppendLine($line)
+                $readTask = $proc.StandardError.ReadLineAsync()
+            }
+        }
 
-    $output = $proc.StandardError.ReadToEnd()
+        # Hang-Detection
+        if (((Get-Date) - $lastOutputTime).TotalSeconds -gt $hangTimeoutSeconds) {
+            $proc.Kill()
+            Write-Host "`nFEHLER: FFmpeg reagiert bei Metadaten-Analyse nicht (Timeout)." -ForegroundColor Red
+            throw "Hang-Detection ausgelöst in Get-FFmpegOutput"
+        }
+
+        Start-Sleep -Milliseconds 50
+    }
+
     $proc.WaitForExit()
 
-    # Aufraeumen: Watcher beenden, wenn er noch laeuft
-    if ($watcherJob.State -eq 'Running') {
-        Stop-Job $watcherJob
-    }
-    Remove-Job $watcherJob
+    # Letzte Reste aus dem Stream lesen
+    $remaining = $proc.StandardError.ReadToEnd()
+    if ($remaining) { [void]$outputBuilder.AppendLine($remaining) }
 
-    return $output
+    return $outputBuilder.ToString()
 }
 function Get-BasicVideoInfo {
     # Extrahiert grundlegende Video-Metadaten (Groeße, FPS, Dauer, Codec, Aufloesung) aus der FFmpeg-Ausgabe.
@@ -448,7 +460,6 @@ function Get-AudioInfo {
                 "mono"      { $info.AudioChannels = 1; break }
                 "stereo"    { $info.AudioChannels = 2; break }
                 "2\.1"      { $info.AudioChannels = 3; break }
-                "quad"      { $info.AudioChannels = 4; break }
                 "5\.0"      { $info.AudioChannels = 5; break }
                 "5\.1"      { $info.AudioChannels = 6; break }
                 "6\.1"      { $info.AudioChannels = 7; break }
@@ -691,21 +702,43 @@ function Get-VideoBrightnessInfo {
             $proc = New-Object System.Diagnostics.Process
             $proc.StartInfo = $startInfo
             $proc.Start() | Out-Null
+            
+            $outputBuilder = New-Object System.Text.StringBuilder
+            $lastOutputTime = Get-Date
+            $hangTimeoutSeconds = 120
+            $readTask = $proc.StandardError.ReadLineAsync()
 
-            # Wächter für diesen spezifischen Prozess-Aufruf
-            $watcherJob = Start-Job -ScriptBlock {
-                param($p, $m)
-                Watch-FFmpegProcess -Process $p -Mode $m
-            } -ArgumentList $proc, '1B'
+            while (-not $proc.HasExited) {
+                if ($readTask.IsCompleted) {
+                    $line = $readTask.Result
+                    if ($null -ne $line) {
+                        $lastOutputTime = Get-Date
+                        [void]$outputBuilder.AppendLine($line)
+                        $readTask = $proc.StandardError.ReadLineAsync()
+                    }
+                }
 
-            $output = $proc.StandardError.ReadToEnd()
+                # Hang-Detection pro Segment
+                if (((Get-Date) - $lastOutputTime).TotalSeconds -gt $hangTimeoutSeconds) {
+                    $proc.Kill()
+                    Write-Host "`nFEHLER: FFmpeg reagiert bei Helligkeitsanalyse (Segment) nicht (Timeout)." -ForegroundColor Red
+                    throw "Hang-Detection ausgelöst in Get-VideoBrightnessInfo"
+                }
+
+                Start-Sleep -Milliseconds 50
+            }
+
             $proc.WaitForExit()
+            
+            # Letzte Reste lesen
+            $remaining = $proc.StandardError.ReadToEnd()
+            if ($remaining) { [void]$outputBuilder.AppendLine($remaining) }
+            $output = $outputBuilder.ToString()
 
-            # Aufräumen
-            if ($watcherJob.State -eq 'Running') { Stop-Job $watcherJob }
-            Remove-Job $watcherJob
+            if ($proc.ExitCode -ne 0) {
+                Write-Warning "FFmpeg Segment-Analyse fehlgeschlagen (Exit-Code $($proc.ExitCode))."
+            }
 
-            # showinfo schreibt: mean:[Y U V] oder mean:[Y U V A] - erster Wert ist Luma 0-255
             $regexMatches = [regex]::Matches($output, "mean:\[(\d+)")
             $segValues = $regexMatches | ForEach-Object { [double]$_.Groups[1].Value }
             $allValues += $segValues
@@ -818,21 +851,60 @@ function Get-LoudnessInfo {
         $proc.StartInfo = $startInfo
         $proc.Start() | Out-Null
 
-        # Startet den Wächter (Modus 1B)
-        Write-Host "  -> Starte Watcher-Job fuer Loudness-Analyse (PID: $($proc.Id))..." -ForegroundColor DarkGray
-        $watcherJob = Start-Job -ScriptBlock {
-            param($p, $m)
-            Watch-FFmpegProcess -Process $p -Mode $m
-        } -ArgumentList $proc, '1B'
+        $outputBuilder = New-Object System.Text.StringBuilder
+        $totalDuration = $sourceInfo.Duration
+        $lastOutputTime = Get-Date
+        $hangTimeoutSeconds = 120
+        $currentLufs = "N/A"
 
-        $output = $proc.StandardError.ReadToEnd()
+        $readTask = $proc.StandardError.ReadLineAsync()
+
+        while (-not $proc.HasExited) {
+            if ($readTask.IsCompleted) {
+                $line = $readTask.Result
+                if ($null -ne $line) {
+                    $lastOutputTime = Get-Date
+                    [void]$outputBuilder.AppendLine($line)
+
+                    # Fortschritt aus 'time=' extrahieren
+                    if ($line -match "time=(\d+):(\d+):(\d+)\.(\d+)") {
+                        $h = [int]$matches[1]; $m = [int]$matches[2]; $s = [int]$matches[3]; $ms = [int]$matches[4]
+                        $currentTimeSec = $h * 3600 + $m * 60 + $s + ($ms / 100)
+                        
+                        if ($totalDuration -gt 0) {
+                            $percent = [math]::Min(($currentTimeSec / $totalDuration) * 100, 100)
+                            $progressText = "Lautstärke-Analyse: {0:N2}% | Aktuell: {1} LUFS" -f $percent, $currentLufs
+                            Write-Host "`r$progressText" -NoNewline -ForegroundColor Gray
+                        }
+                    }
+
+                    # Momentan-Lautstärke (M) extrahieren
+                    if ($line -match "M:\s*([-\d\.]+)") {
+                        $currentLufs = $matches[1]
+                    }
+
+                    $readTask = $proc.StandardError.ReadLineAsync()
+                }
+            }
+
+            # Hang-Detection
+            if (((Get-Date) - $lastOutputTime).TotalSeconds -gt $hangTimeoutSeconds) {
+                $proc.Kill()
+                Write-Host "`nFEHLER: FFmpeg reagiert bei Analyse nicht (Timeout)." -ForegroundColor Red
+                throw "Hang-Detection ausgelöst in Get-LoudnessInfo"
+            }
+
+            Start-Sleep -Milliseconds 50
+        }
+
+        Write-Host "" # Zeilenumbruch nach Live-Anzeige
         $proc.WaitForExit()
 
-        # Aufräumen
-        if ($watcherJob.State -eq 'Running') { Stop-Job $watcherJob }
-        Remove-Job $watcherJob
+        # Letzte Reste aus dem Stream lesen
+        $remaining = $proc.StandardError.ReadToEnd()
+        if ($remaining) { [void]$outputBuilder.AppendLine($remaining) }
 
-        return $output
+        return $outputBuilder.ToString()
     }
     catch {
         Write-Host "FEHLER: Fehler beim Ausfuehren von FFmpeg: $_" -ForegroundColor Red
@@ -1125,13 +1197,6 @@ function Set-VolumeGain {
         Write-Host "Starte Fortschrittsanzeige fuer Encoding..." -ForegroundColor Cyan
         $totalFrames = [math]::Round($sourceInfo.Duration1 * $sourceInfo.FPS)
 
-        # Wächter starten (Modus 3 für Haupt-Encoding mit Frame-Auswertung)
-        Write-Host "  -> Starte Watcher-Job fuer PID: $($process.Id) (Modus: 3)" -ForegroundColor DarkGray
-        $watcherJob = Start-Job -ScriptBlock {
-            param($p, $m)
-            Watch-FFmpegProcess -Process $p -Mode $m
-        } -ArgumentList $process, '3'
-
         # Timeout-Initialisierung fuer Hang-Detection
         $lastOutputTime = Get-Date
         $hangTimeoutSeconds = 300 # 5 Minuten Timeout
@@ -1194,11 +1259,6 @@ function Set-VolumeGain {
 
         $process.WaitForExit()
 
-        # Wächter aufräumen
-        if ($watcherJob.State -eq 'Running') { Stop-Job $watcherJob }
-        Remove-Job $watcherJob
-```
-
             $remainingErrors = $process.StandardError.ReadToEnd()
             if ($remainingErrors) {
                 $allErrors += $remainingErrors.Split([System.Environment]::NewLine)
@@ -1222,7 +1282,6 @@ function Set-VolumeGain {
             "`n==== Fehler bei GPU-Encoding: `n$_ ====" | Add-Content -LiteralPath $logDatei
             Write-Host "Versuche CPU encoding (libx265)..." -ForegroundColor Yellow
             "`n==== Versuche CPU encoding (libx265)... ====" | Add-Content -LiteralPath $logDatei
-```
 
             # Baue die Argumente komplett neu auf, um Fehler in der Reihenfolge zu vermeiden
             $newArgs = @(
@@ -1290,24 +1349,17 @@ function Set-VolumeGain {
 
             $process.Start() | Out-Null
 
-            # Berechnet die Gesamtzahl der Frames fuer eine robustere Fortschrittsanzeige.
-
-
-            # 1. Wächter starten (Bevor der Loop beginnt)
-            Write-Host "  -> Starte Watcher-Job (PID: $($process.Id))..." -ForegroundColor DarkGray
-            $watcherJob = Start-Job -ScriptBlock {
-                param($p, $m)
-                Watch-FFmpegProcess -Process $p -Mode $m
-            } -ArgumentList $process, '3'
-
-            # 2. Berechnungen und Loop
+            # Loop mit integrierter Hang-Detection
             $totalFrames = [math]::Round($sourceInfo.Duration1 * $sourceInfo.FPS)
+            $lastOutputTime = Get-Date
+            $hangTimeoutSeconds = 300
             $readTask = $process.StandardError.ReadLineAsync()
 
             while (-not $process.HasExited) {
                 if ($readTask.IsCompleted) {
                     $line = $readTask.Result
                     if ($null -ne $line) {
+                        $lastOutputTime = Get-Date
                         if ($line -like "frame=*") {
                             $progressMatch = [regex]::Match($line, "frame=\s*(\d+)\s+fps=\s*([\d\.]+)")
                             if ($progressMatch.Success) {
@@ -1332,12 +1384,17 @@ function Set-VolumeGain {
                         $readTask = $process.StandardError.ReadLineAsync()
                     }
                 }
+
+                # Hang-Detection CPU Fallback
+                if (((Get-Date) - $lastOutputTime).TotalSeconds -gt $hangTimeoutSeconds) {
+                    $process.Kill()
+                    Write-Host "`nFEHLER: FFmpeg-Prozess (CPU) reagiert seit $hangTimeoutSeconds Sekunden nicht mehr." -ForegroundColor Red
+                    throw "FFmpeg-Prozess haengt (Timeout)."
+                }
+
                 Start-Sleep -Milliseconds 50
             }
 
-            # 3. Wächter beenden (Sobald der Prozess fertig ist)
-            if ($watcherJob.State -eq 'Running') { Stop-Job $watcherJob }
-            Remove-Job $watcherJob
             Write-Host "" # Zeilenumbruch
 
             $process.WaitForExit()
@@ -1778,7 +1835,9 @@ Add-Type -AssemblyName System.Windows.Forms
 # GetForegroundWindow() holt das Handle des aktuell aktiven Fensters (VSCode) zum Zeitpunkt
 # des Scriptstarts. Das ist zuverlaessiger als MainWindowHandle, das im VSCode-Terminal
 # IntPtr.Zero zurueckgibt weil der PowerShell-Prozess kein eigenes Top-Level-Fenster hat.
-Add-Type -TypeDefinition @"
+# Prueft ob der Typ bereits existiert, um Mehrfachdefinition zu vermeiden
+if (-not ("ForegroundWindowOwner" -as [type])) {
+    Add-Type -TypeDefinition @"
 using System;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
@@ -1787,6 +1846,7 @@ public class ForegroundWindowOwner : IWin32Window {
     public IntPtr Handle { get { return GetForegroundWindow(); } }
 }
 "@ -ReferencedAssemblies System.Windows.Forms
+}
 
 $dialogOwner = New-Object ForegroundWindowOwner
 
