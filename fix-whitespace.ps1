@@ -1,1 +1,0 @@
-Get-Content 'Serien umbenenner.ps1' | ForEach-Object { $_.TrimEnd() } | Set-Content 'Serien umbenenner.ps1'
