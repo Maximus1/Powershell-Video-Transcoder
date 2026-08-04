@@ -3,11 +3,8 @@
 $ffmpegPath = "F:\media-autobuild_suite-master\local64\bin-video\ffmpeg.exe"
 # Pfad zur mkvextract-Anwendung aus dem MKVToolNix-Paket.
 $mkvextractPath = "C:\Program Files\MKVToolNix\mkvextract.exe"
-# Pfad zur mkclean-Anwendung.
-
 # Ziel-Lautheit in LUFS fuer die Audionormalisierung (z.B. -18 fuer eine konsistente Lautstaerke).
 $targetLoudness = -18
-$filePath = ''
 # Liste der zu verarbeitenden Dateiendungen.
 $extensions = @('.mkv', '.mp4', '.avi', '.m2ts')
 
@@ -62,66 +59,6 @@ $vmafMaxRetries  = 2
 
 #endregion
 #region Hilfsfunktionen
-
-function Watch-FFmpegProcess {
-    <#
-    .SYNOPSIS
-        Asynchroner Hintergrund-Waechter fuer FFmpeg-Prozesse zur Vermeidung von Hangs.
-    #>
-    param (
-        [Parameter(Mandatory = $true)]
-        [System.Diagnostics.Process]$Process,
-        [Parameter(Mandatory = $true)]
-        [ValidateSet('1A', '1B', '2', '3', '4')]
-        [string]$Mode
-    )
-
-    $timeoutSeconds = 120
-    $checkInterval = 10
-    $lastProgressTime = Get-Date
-    $lastFrameCount = 0
-    $lastCpuTime = $Process.TotalProcessorTime.TotalSeconds
-
-    while (-not $Process.HasExited) {
-        Start-Sleep -Seconds $checkInterval
-        if ($Process.HasExited) { break }
-
-        $currentTime = Get-Date
-        $currentCpuTime = $Process.TotalProcessorTime.TotalSeconds
-        $cpuDelta = $currentCpuTime - $lastCpuTime
-        $lastCpuTime = $currentCpuTime
-
-        # MODUS 2/3: Haupt-Encoding mit Frame-Auswertung aus globaler Variable
-        if ($Mode -eq '2' -or $Mode -eq '3') {
-            if ($global:CurrentFFmpegFrame -and $global:CurrentFFmpegFrame -gt $lastFrameCount) {
-                $lastFrameCount = $global:CurrentFFmpegFrame
-                $lastProgressTime = $currentTime
-            }
-
-            if (($currentTime - $lastProgressTime).TotalSeconds -gt $timeoutSeconds) {
-                if ($cpuDelta -lt 0.5) {
-                    Write-Warning "Watch-FFmpegProcess: PID $($Process.Id) haengt! Seit 120s kein Framefortschritt und CPU inaktiv."
-                    $Process.Kill()
-                    break
-                }
-            }
-        }
-
-        # MODUS 1B / 4: Analysen (-f null) und Container-Operationen (reine CPU-Ueberwachung)
-        if ($Mode -eq '1B' -or $Mode -eq '4') {
-            if ($cpuDelta -gt 0.5) {
-                $lastProgressTime = $currentTime
-            }
-
-            if (($currentTime - $lastProgressTime).TotalSeconds -gt $timeoutSeconds) {
-                Write-Warning "Watch-FFmpegProcess: PID $($Process.Id) haengt! CPU-Zeit stagniert seit 120s."
-                $Process.Kill()
-                break
-            }
-        }
-    }
-}
-
 function Get-HardwareEncoder {
     # Bestimmt den verfuegbaren Hardware-Encoder basierend auf System-GPU und FFmpeg-Unterstuetzung.
     param(
@@ -297,7 +234,9 @@ function Get-MediaInfo {
 }
 #region Hilfsfunktionen zu Get-MediaInfo
 function Get-FFmpegOutput {
+    # Ruft die FFmpeg-Ausgabe fuer eine Datei ab.
     param ([string]$FilePath)
+    # Fuehrt 'ffmpeg -i' fuer eine Datei aus und faengt die Standardfehlerausgabe (stderr) ab, die die Metadaten enthaelt.
 
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
     $startInfo.FileName = $ffmpegPath
@@ -306,42 +245,12 @@ function Get-FFmpegOutput {
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
 
-    $proc = New-Object System.Diagnostics.Process
-    $proc.StartInfo = $startInfo
-    $proc.Start() | Out-Null
-
-    $outputBuilder = New-Object System.Text.StringBuilder
-    $lastOutputTime = Get-Date
-    $hangTimeoutSeconds = 120
-    $readTask = $proc.StandardError.ReadLineAsync()
-
-    while (-not $proc.HasExited) {
-        if ($readTask.IsCompleted) {
-            $line = $readTask.Result
-            if ($null -ne $line) {
-                $lastOutputTime = Get-Date
-                [void]$outputBuilder.AppendLine($line)
-                $readTask = $proc.StandardError.ReadLineAsync()
-            }
-        }
-
-        # Hang-Detection
-        if (((Get-Date) - $lastOutputTime).TotalSeconds -gt $hangTimeoutSeconds) {
-            $proc.Kill()
-            Write-Host "`nFEHLER: FFmpeg reagiert bei Metadaten-Analyse nicht (Timeout)." -ForegroundColor Red
-            throw "Hang-Detection ausgelöst in Get-FFmpegOutput"
-        }
-
-        Start-Sleep -Milliseconds 50
-    }
-
-    $proc.WaitForExit()
-
-    # Letzte Reste aus dem Stream lesen
-    $remaining = $proc.StandardError.ReadToEnd()
-    if ($remaining) { [void]$outputBuilder.AppendLine($remaining) }
-
-    return $outputBuilder.ToString()
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    $process.Start() | Out-Null
+    $output = $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
+    return $output
 }
 function Get-BasicVideoInfo {
     # Extrahiert grundlegende Video-Metadaten (Groeße, FPS, Dauer, Codec, Aufloesung) aus der FFmpeg-Ausgabe.
@@ -460,6 +369,7 @@ function Get-AudioInfo {
                 "mono"      { $info.AudioChannels = 1; break }
                 "stereo"    { $info.AudioChannels = 2; break }
                 "2\.1"      { $info.AudioChannels = 3; break }
+                "quad"      { $info.AudioChannels = 4; break }
                 "5\.0"      { $info.AudioChannels = 5; break }
                 "5\.1"      { $info.AudioChannels = 6; break }
                 "6\.1"      { $info.AudioChannels = 7; break }
@@ -479,8 +389,11 @@ function Get-AudioInfo {
     return $info
 }
 function Get-InterlaceInfo {
+    # Bestimmt, ob ein Video Interlaced-Material enthaelt, mittels FFmpeg's 'idet'-Filter.
     param ([string]$FilePath)
     $info = @{}
+    # Verwendet den 'idet'-Filter von FFmpeg, um festzustellen, ob ein Video Interlaced-Material ist.
+    # Der idet-Filter analysiert eine Anzahl von Frames (hier 1500) und zaehlt, wie viele progressiv, TFF oder BFF sind.
     try {
         $startInfo = New-Object System.Diagnostics.ProcessStartInfo
         $startInfo.FileName = $ffmpegPath
@@ -492,20 +405,10 @@ function Get-InterlaceInfo {
         $proc = New-Object System.Diagnostics.Process
         $proc.StartInfo = $startInfo
         $proc.Start() | Out-Null
-
-        # Wächter starten (Modus 1B für Analysen)
-        $watcherJob = Start-Job -ScriptBlock {
-            param($p, $m)
-            Watch-FFmpegProcess -Process $p -Mode $m
-        } -ArgumentList $proc, '1B'
-
         $output = $proc.StandardError.ReadToEnd()
         $proc.WaitForExit()
 
-        # Aufräumen
-        if ($watcherJob.State -eq 'Running') { Stop-Job $watcherJob }
-        Remove-Job $watcherJob
-
+        # Extrahiert die finale Zusammenfassung des idet-Filters.
         $match = [regex]::Matches($output, "Multi frame detection:\s*TFF:\s*(\d+)\s*BFF:\s*(\d+)\s*Progressive:\s*(\d+)")
         if ($match.Count -gt 0) {
             $last = $match[$match.Count - 1]
@@ -513,11 +416,14 @@ function Get-InterlaceInfo {
             $bff = [int]$last.Groups[2].Value
             $prog = [int]$last.Groups[3].Value
             $info.Interlaced = ($tff + $bff) -gt $prog
+            # Wenn die Summe der Interlaced-Frames (TFF + BFF) groeßer ist als die der progressiven Frames, wird das Video als Interlaced eingestuft.
         }
     }
     catch {
         $info.Interlaced = $false
+        # Bei einem Fehler wird sicherheitshalber von progressivem Material ausgegangen.
     }
+
     return $info
 }
 function Test-IsSeries {
@@ -702,43 +608,10 @@ function Get-VideoBrightnessInfo {
             $proc = New-Object System.Diagnostics.Process
             $proc.StartInfo = $startInfo
             $proc.Start() | Out-Null
-            
-            $outputBuilder = New-Object System.Text.StringBuilder
-            $lastOutputTime = Get-Date
-            $hangTimeoutSeconds = 120
-            $readTask = $proc.StandardError.ReadLineAsync()
-
-            while (-not $proc.HasExited) {
-                if ($readTask.IsCompleted) {
-                    $line = $readTask.Result
-                    if ($null -ne $line) {
-                        $lastOutputTime = Get-Date
-                        [void]$outputBuilder.AppendLine($line)
-                        $readTask = $proc.StandardError.ReadLineAsync()
-                    }
-                }
-
-                # Hang-Detection pro Segment
-                if (((Get-Date) - $lastOutputTime).TotalSeconds -gt $hangTimeoutSeconds) {
-                    $proc.Kill()
-                    Write-Host "`nFEHLER: FFmpeg reagiert bei Helligkeitsanalyse (Segment) nicht (Timeout)." -ForegroundColor Red
-                    throw "Hang-Detection ausgelöst in Get-VideoBrightnessInfo"
-                }
-
-                Start-Sleep -Milliseconds 50
-            }
-
+            $output = $proc.StandardError.ReadToEnd()
             $proc.WaitForExit()
-            
-            # Letzte Reste lesen
-            $remaining = $proc.StandardError.ReadToEnd()
-            if ($remaining) { [void]$outputBuilder.AppendLine($remaining) }
-            $output = $outputBuilder.ToString()
 
-            if ($proc.ExitCode -ne 0) {
-                Write-Warning "FFmpeg Segment-Analyse fehlgeschlagen (Exit-Code $($proc.ExitCode))."
-            }
-
+            # showinfo schreibt: mean:[Y U V] oder mean:[Y U V A] - erster Wert ist Luma 0-255
             $regexMatches = [regex]::Matches($output, "mean:\[(\d+)")
             $segValues = $regexMatches | ForEach-Object { [double]$_.Groups[1].Value }
             $allValues += $segValues
@@ -840,71 +713,38 @@ function Get-LoudnessInfo {
     )
     # Analysiert die Audiospur einer Datei mit dem FFmpeg 'ebur128'-Filter, um die Lautheit (LUFS) zu bestimmen.
     try {
-        $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-        $startInfo.FileName = $ffmpegPath
-        $startInfo.Arguments = "-i `"$filePath`" -vn -hide_banner -loglevel info -stats -threads 12 -filter_complex `"[0:a:0]ebur128=metadata=1`" -f null NUL"
-        $startInfo.RedirectStandardError = $true
-        $startInfo.UseShellExecute = $false
-        $startInfo.CreateNoWindow = $true
+        Write-Host "Starte FFmpeg zur Lautstaerkeanalyse..." -ForegroundColor Cyan
+        "`n==== Starte FFmpeg zur Lautstaerkeanalyse fuer $filePath ====" | Add-Content -LiteralPath $logDatei
 
-        $proc = New-Object System.Diagnostics.Process
-        $proc.StartInfo = $startInfo
-        $proc.Start() | Out-Null
+        # Stellt die Basis-Argumente fuer die Lautheitsanalyse zusammen.
+        $baseArgs = @(
+            "-i", "`"$filePath`"", "-vn", "-hide_banner", "-loglevel", "info", "-stats", "-threads", "12",
+            "-filter_complex", "[0:a:0]ebur128=metadata=1", "-f", "null", "NUL"
+        )
 
-        $outputBuilder = New-Object System.Text.StringBuilder
-        $totalDuration = $sourceInfo.Duration
-        $lastOutputTime = Get-Date
-        $hangTimeoutSeconds = 120
-        $currentLufs = "N/A"
-
-        $readTask = $proc.StandardError.ReadLineAsync()
-
-        while (-not $proc.HasExited) {
-            if ($readTask.IsCompleted) {
-                $line = $readTask.Result
-                if ($null -ne $line) {
-                    $lastOutputTime = Get-Date
-                    [void]$outputBuilder.AppendLine($line)
-
-                    # Fortschritt aus 'time=' extrahieren
-                    if ($line -match "time=(\d+):(\d+):(\d+)\.(\d+)") {
-                        $h = [int]$matches[1]; $m = [int]$matches[2]; $s = [int]$matches[3]; $ms = [int]$matches[4]
-                        $currentTimeSec = $h * 3600 + $m * 60 + $s + ($ms / 100)
-                        
-                        if ($totalDuration -gt 0) {
-                            $percent = [math]::Min(($currentTimeSec / $totalDuration) * 100, 100)
-                            $progressText = "Lautstärke-Analyse: {0:N2}% | Aktuell: {1} LUFS" -f $percent, $currentLufs
-                            Write-Host "`r$progressText" -NoNewline -ForegroundColor Gray
-                        }
-                    }
-
-                    # Momentan-Lautstärke (M) extrahieren
-                    if ($line -match "M:\s*([-\d\.]+)") {
-                        $currentLufs = $matches[1]
-                    }
-
-                    $readTask = $proc.StandardError.ReadLineAsync()
-                }
-            }
-
-            # Hang-Detection
-            if (((Get-Date) - $lastOutputTime).TotalSeconds -gt $hangTimeoutSeconds) {
-                $proc.Kill()
-                Write-Host "`nFEHLER: FFmpeg reagiert bei Analyse nicht (Timeout)." -ForegroundColor Red
-                throw "Hang-Detection ausgelöst in Get-LoudnessInfo"
-            }
-
-            Start-Sleep -Milliseconds 50
+        $ffmpegArguments = @()
+        # Fuegt die Hardwarebeschleunigung hinzu, außer sie wurde explizit deaktiviert (z.B. fuer AV1).
+        if ($sourceInfo.NoAccel -eq $true) {
+            $ffmpegArguments = $baseArgs
+        }
+        else {
+            $ffmpegArguments = if ($hwaccelMethod) { @("-hwaccel", $hwaccelMethod) + $baseArgs } else { $baseArgs }
         }
 
-        Write-Host "" # Zeilenumbruch nach Live-Anzeige
-        $proc.WaitForExit()
+        $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $processInfo.FileName = $ffmpegPath
+        $processInfo.Arguments = $ffmpegArguments -join ' '
+        $processInfo.RedirectStandardError = $true
+        $processInfo.UseShellExecute = $false
+        $processInfo.CreateNoWindow = $true
 
-        # Letzte Reste aus dem Stream lesen
-        $remaining = $proc.StandardError.ReadToEnd()
-        if ($remaining) { [void]$outputBuilder.AppendLine($remaining) }
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $processInfo
+        $process.Start() | Out-Null
 
-        return $outputBuilder.ToString()
+        $ffmpegOutput = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        return $ffmpegOutput
     }
     catch {
         Write-Host "FEHLER: Fehler beim Ausfuehren von FFmpeg: $_" -ForegroundColor Red
@@ -913,12 +753,29 @@ function Get-LoudnessInfo {
     }
 }
 function Set-VolumeGain {
+    # Funktion zur Anpassung der Lautstaerke mit FFmpeg
     param (
-        [string]$filePath, [double]$gain, [string]$outputFile, [int]$audioChannels,
-        [string]$videoCodec, [bool]$interlaced, [int]$bitDepth, [hashtable]$sourceInfo,
-        [string]$logDatei, [string]$ffmpegPath, [string]$videoEncoder, [string]$encoderPreset,
-        [int]$crfTargets, [int]$crfTargetm, [string]$amd_quality, [string]$Nvidia_quality,
-        [int]$targetLoudness, [string]$targetVideoCodec, [object]$brightnessAvg = $null
+        [string]$filePath,
+        [double]$gain,
+        [string]$outputFile,
+        [int]$audioChannels,
+        [string]$videoCodec,
+        [bool]$interlaced,
+        [int]$bitDepth,
+        [hashtable]$sourceInfo,
+        [string]$logDatei,
+        [string]$ffmpegPath,
+        [string]$videoEncoder,
+        [string]$encoderPreset,
+        [int]$crfTargets,
+        [int]$crfTargetm,
+        [string]$amd_quality,
+        [string]$Nvidia_quality,
+        [int]$targetLoudness,
+        [string]$targetVideoCodec,
+        # Durchschnittlicher YAVG-Helligkeitswert aus Get-VideoBrightnessInfo (0-255).
+        # $null bedeutet: Analyse nicht verfuegbar (HDR oder Fehler) -> kein CRF-Eingriff.
+        [object]$brightnessAvg = $null
     )
 
     $videoCopyFlag = $false
@@ -945,7 +802,9 @@ function Set-VolumeGain {
             "`n====  -> Hardwarebeschleunigung (Decoding) wegen AV1 Codec deaktiviert. ===" | Add-Content -LiteralPath $logDatei
         }
         else {
-            $ffmpegArguments += @("-hwaccel", "d3d11va")
+            if ($hwaccelMethod) {
+                $ffmpegArguments += @("-hwaccel", $hwaccelMethod)
+            }
         }
         $ffmpegArguments += @(
             # Eingabedatei angeben
@@ -1038,6 +897,8 @@ function Set-VolumeGain {
             $qualityValue = if ($sourceInfo.IsSeries) { $crfTargets } else { $crfTargetm }
             $cqpValue = [math]::Round($qualityValue * 1.2)
             $cqValue  = [math]::Round($qualityValue * 1.2)
+            # AMD QVBR-Skala ist invertiert (1=schlechteste, 51=beste Qualitaet) -> spiegeln
+            $qvbrLevel = [math]::Min(51, [math]::Max(1, 51 - $cqpValue))
 
             # CRF-Anpassung basierend auf Helligkeitsanalyse.
             # $brightnessAvg ist $true wenn das Video ueberwiegend dunkel ist (5+/9 Segmente < 60),
@@ -1050,6 +911,7 @@ function Set-VolumeGain {
                 # CQP/CQ fuer HW-Encoder entsprechend neu berechnen
                 $cqpValue = [math]::Round($qualityValue * 1.2)
                 $cqValue  = [math]::Round($qualityValue * 1.2)
+                $qvbrLevel = [math]::Min(51, [math]::Max(1, 51 - $cqpValue))
             }
             elseif ($brightnessAvg -eq $false) {
                 Write-Host "  Helligkeitskorrektur: Nicht erforderlich (normales Video) → Standard-CRF $qualityValue." -ForegroundColor DarkGray
@@ -1059,7 +921,7 @@ function Set-VolumeGain {
             }
 
             if ($videoEncoder -eq "hevc_amf") {
-                Write-Host "Qualitaets-Ziel (AMD CQP): $cqpValue" -ForegroundColor Cyan
+                Write-Host "Qualitaets-Ziel (AMD QVBR-Level, 51=beste Qualitaet): $qvbrLevel" -ForegroundColor Cyan
             }
             elseif ($videoEncoder -eq "hevc_nvenc") {
                 Write-Host "Qualitaets-Ziel (NVIDIA CQ): $cqValue" -ForegroundColor Cyan
@@ -1069,19 +931,16 @@ function Set-VolumeGain {
             }
 
             if ($videoEncoder -eq "hevc_amf") {
-                $qpMax = [math]::Min($cqpValue + 8, 51)
                 $ffmpegArguments += @(
                 "-c:v", $videoEncoder,
                 "-pix_fmt", "yuv420p",
-                "-quality", "quality",
+                "-quality", $amd_quality,
                 "-rc", "qvbr",
-                "-qvbr_quality_level", $cqpValue,
-                "-qmin", $cqpValue,
-                "-qmax", $qpMax,
+                "-qvbr_quality_level", $qvbrLevel,
                 "-tiles", "2x2",
                 "-b:v", "0",
                 "-bf", "2",                # B-Frames
-                "-b_ref_mode", "1",
+                #"-b_ref_mode", "1",
                 "-pa_scene_change_detection_enable", "1"
               )
             }
@@ -1091,7 +950,7 @@ function Set-VolumeGain {
                     "-c:v", $videoEncoder,
                     "-pix_fmt", "yuv420p",
                     "-preset", $Nvidia_quality,
-                    "-rc", "constqp ",
+                    "-rc", "constqp",
                     "-cqi", $cqValue,
                     "-qpp", "$cqValue",
                     "-qp_cb", "$cqValue",
@@ -1179,85 +1038,85 @@ function Set-VolumeGain {
         Write-Host "FFmpeg-Argumente: $($ffmpegArguments -join ' ')" -ForegroundColor DarkCyan
         "`n==== FFmpeg-Argumente: $($ffmpegArguments -join ' ') ====" | Add-Content -LiteralPath $logDatei
 
-    try {
-        # Startet den FFmpeg-Prozess und implementiert eine Fortschrittsanzeige.
-        $processInfo = New-Object System.Diagnostics.ProcessStartInfo
-        $processInfo.FileName = $ffmpegPath
-        $processInfo.Arguments = $ffmpegArguments -join ' '
-        $processInfo.RedirectStandardError = $true
-        $processInfo.UseShellExecute = $false
-        $processInfo.CreateNoWindow = $true
+        try {
+            # Startet den FFmpeg-Prozess und implementiert eine Fortschrittsanzeige.
+            $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+            $processInfo.FileName = $ffmpegPath
+            $processInfo.Arguments = $ffmpegArguments -join ' '
+            $processInfo.RedirectStandardError = $true
+            $processInfo.UseShellExecute = $false
+            $processInfo.CreateNoWindow = $true
 
-        $process = New-Object System.Diagnostics.Process
-        $process.StartInfo = $processInfo
+            $process = New-Object System.Diagnostics.Process
+            $process.StartInfo = $processInfo
 
-        $process.Start() | Out-Null
+            $process.Start() | Out-Null
 
-        # Berechnet die Gesamtzahl der Frames fuer eine robustere Fortschrittsanzeige.
-        Write-Host "Starte Fortschrittsanzeige fuer Encoding..." -ForegroundColor Cyan
-        $totalFrames = [math]::Round($sourceInfo.Duration1 * $sourceInfo.FPS)
+            # Berechnet die Gesamtzahl der Frames fuer eine robustere Fortschrittsanzeige.
+            Write-Host "Starte Fortschrittsanzeige fuer das Encoding..." -ForegroundColor Cyan
+            $totalFrames = [math]::Round($sourceInfo.Duration1 * $sourceInfo.FPS)
 
-        # Timeout-Initialisierung fuer Hang-Detection
-        $lastOutputTime = Get-Date
-        $hangTimeoutSeconds = 300 # 5 Minuten Timeout
-        $readTask = $process.StandardError.ReadLineAsync()
+            # Timeout-Initialisierung fuer Hang-Detection
+            $lastOutputTime = Get-Date
+            $hangTimeoutSeconds = 300 # 5 Minuten Timeout
+            $readTask = $process.StandardError.ReadLineAsync()
 
-        # Echtzeit-Verarbeitung der FFmpeg-Ausgabe zur Restzeitberechnung
-        while (-not $process.HasExited) {
-            # Pruefen ob neue Daten vom Prozess verfuegbar sind (non-blocking)
-            if ($readTask.IsCompleted) {
-                $line = $readTask.Result
+            # Echtzeit-Verarbeitung der FFmpeg-Ausgabe zur Restzeitberechnung
+            while (-not $process.HasExited) {
+                # Pruefen ob neue Daten vom Prozess verfuegbar sind (non-blocking)
+                if ($readTask.IsCompleted) {
+                    $line = $readTask.Result
 
-                if ($null -ne $line) {
-                    $lastOutputTime = Get-Date # Zeitstempel aktualisieren bei Aktivitaet
+                    if ($null -ne $line) {
+                        $lastOutputTime = Get-Date # Zeitstempel aktualisieren bei Aktivitaet
 
-                    if ($line -like "frame=*") {
-                        # Extrahiere verarbeitete Frames und aktuelle Kodier-FPS
-                        $progressMatch = [regex]::Match($line, "frame=\s*(\d+)\s+fps=\s*([\d\.]+)")
-                        if ($progressMatch.Success) {
-                            $processedFrames = [int64]$progressMatch.Groups[1].Value
-                            $currentFps = [double]$progressMatch.Groups[2].Value.Replace('.', ',')
+                        if ($line -like "frame=*") {
+                            # Extrahiere verarbeitete Frames und aktuelle Kodier-FPS
+                            $progressMatch = [regex]::Match($line, "frame=\s*(\d+)\s+fps=\s*([\d\.]+)")
+                            if ($progressMatch.Success) {
+                                $processedFrames = [int64]$progressMatch.Groups[1].Value
+                                $currentFps = [double]$progressMatch.Groups[2].Value.Replace('.', ',')
 
-                            if ($currentFps -gt 0 -and $totalFrames -gt 0 -and $processedFrames -le $totalFrames) {
-                                $remainingFrames = $totalFrames - $processedFrames
-                                $remainingExecutionSeconds = $remainingFrames / $currentFps
-                                $remainingTimeSpan = [TimeSpan]::FromSeconds($remainingExecutionSeconds)
-                                $percentComplete = ($processedFrames / $totalFrames) * 100
+                                if ($currentFps -gt 0 -and $totalFrames -gt 0 -and $processedFrames -le $totalFrames) {
+                                    $remainingFrames = $totalFrames - $processedFrames
+                                    $remainingExecutionSeconds = $remainingFrames / $currentFps
+                                    $remainingTimeSpan = [TimeSpan]::FromSeconds($remainingExecutionSeconds)
+                                    $percentComplete = ($processedFrames / $totalFrames) * 100
 
-                                # Stelle sicher, dass der Prozentsatz nicht ueber 100 geht
-                                if ($percentComplete -gt 100) { $percentComplete = 100.0 }
+                                    # Stelle sicher, dass der Prozentsatz nicht ueber 100 geht
+                                    if ($percentComplete -gt 100) { $percentComplete = 100.0 }
 
-                                # Aktuelle Dateigroesse abrufen und formatieren
-                                $currentSizeMB = 0
-                                if (Test-Path -LiteralPath $outputFile) {
-                                    # ErrorAction SilentlyContinue, falls die Datei gerade geschrieben wird und gesperrt ist
-                                    $currentSizeMB = (Get-Item -LiteralPath $outputFile -ErrorAction SilentlyContinue).Length / 1MB
+                                    # Aktuelle Dateigroesse abrufen und formatieren
+                                    $currentSizeMB = 0
+                                    if (Test-Path -LiteralPath $outputFile) {
+                                        # ErrorAction SilentlyContinue, falls die Datei gerade geschrieben wird und gesperrt ist
+                                        $currentSizeMB = (Get-Item -LiteralPath $outputFile -ErrorAction SilentlyContinue).Length / 1MB
+                                    }
+                                    $progressText = "Fortschritt: {0:N2}% | Verbleibend: {1:hh\h\:mm\m\:ss\s} | FPS: {2:N0} | Größe: {3:N2} MB" -f $percentComplete, $remainingTimeSpan, $currentFps, $currentSizeMB
+                                    Write-Host "`r$progressText" -NoNewline -ForegroundColor Gray
                                 }
-                                $progressText = "Fortschritt: {0:N2}% | Verbleibend: {1:hh\h\:mm\m\:ss\s} | FPS: {2:N0} | Größe: {3:N2} MB" -f $percentComplete, $remainingTimeSpan, $currentFps, $currentSizeMB
-                                Write-Host "`r$progressText" -NoNewline -ForegroundColor Gray
                             }
                         }
+                        # Naechste Zeile asynchron lesen
+                        $readTask = $process.StandardError.ReadLineAsync()
                     }
-                    # Naechste Zeile asynchron lesen
-                    $readTask = $process.StandardError.ReadLineAsync()
                 }
+
+                # Hang-Detection: Pruefen ob Timeout ueberschritten
+                if (((Get-Date) - $lastOutputTime).TotalSeconds -gt $hangTimeoutSeconds) {
+                    $process.Kill()
+                    Write-Host "`nFEHLER: FFmpeg-Prozess reagiert seit $hangTimeoutSeconds Sekunden nicht mehr. Prozess wurde beendet." -ForegroundColor Red
+                    throw "FFmpeg-Prozess haengt (Timeout)."
+                }
+
+                # Kurze Pause um CPU-Last niedrig zu halten waehrend wir warten
+                Start-Sleep -Milliseconds 50
             }
 
-            # Hang-Detection: Pruefen ob Timeout ueberschritten
-            if (((Get-Date) - $lastOutputTime).TotalSeconds -gt $hangTimeoutSeconds) {
-                $process.Kill()
-                Write-Host "`nFEHLER: FFmpeg-Prozess reagiert seit $hangTimeoutSeconds Sekunden nicht mehr. Prozess wurde beendet." -ForegroundColor Red
-                throw "FFmpeg-Prozess haengt (Timeout)."
-            }
+            # Sorgt fuer einen sauberen Zeilenumbruch nach der einzeiligen Fortschrittsanzeige.
+            Write-Host ""
 
-            # Kurze Pause um CPU-Last niedrig zu halten waehrend wir warten
-            Start-Sleep -Milliseconds 50
-        }
-
-        # Sorgt fuer einen sauberen Zeilenumbruch nach der einzeiligen Fortschrittsanzeige.
-        Write-Host ""
-
-        $process.WaitForExit()
+            $process.WaitForExit()
 
             $remainingErrors = $process.StandardError.ReadToEnd()
             if ($remainingErrors) {
@@ -1294,7 +1153,9 @@ function Set-VolumeGain {
 
             # Hardware-Decoding nur, wenn nicht AV1
             if ($sourceInfo.NoAccel -ne $true) {
-                $newArgs += @("-hwaccel", "d3d11va")
+                if ($hwaccelMethod) {
+                    $newArgs += @("-hwaccel", $hwaccelMethod)
+                }
             }
 
             # Eingabedatei
@@ -1349,31 +1210,45 @@ function Set-VolumeGain {
 
             $process.Start() | Out-Null
 
-            # Loop mit integrierter Hang-Detection
+            # Berechnet die Gesamtzahl der Frames fuer eine robustere Fortschrittsanzeige.
+
+
             $totalFrames = [math]::Round($sourceInfo.Duration1 * $sourceInfo.FPS)
+
+            # Timeout-Initialisierung fuer Hang-Detection (CPU Fallback)
             $lastOutputTime = Get-Date
-            $hangTimeoutSeconds = 300
+            $hangTimeoutSeconds = 300 # 5 Minuten Timeout
             $readTask = $process.StandardError.ReadLineAsync()
 
+            # Echtzeit-Verarbeitung der FFmpeg-Ausgabe zur Restzeitberechnung
             while (-not $process.HasExited) {
+                # Pruefen ob neue Daten vom Prozess verfuegbar sind (non-blocking)
                 if ($readTask.IsCompleted) {
                     $line = $readTask.Result
+
                     if ($null -ne $line) {
-                        $lastOutputTime = Get-Date
+                        $lastOutputTime = Get-Date # Zeitstempel aktualisieren bei Aktivitaet
+
                         if ($line -like "frame=*") {
+                            # Extrahiere verarbeitete Frames und aktuelle Kodier-FPS
                             $progressMatch = [regex]::Match($line, "frame=\s*(\d+)\s+fps=\s*([\d\.]+)")
                             if ($progressMatch.Success) {
                                 $processedFrames = [int64]$progressMatch.Groups[1].Value
                                 $currentFps = [double]$progressMatch.Groups[2].Value.Replace('.', ',')
 
                                 if ($currentFps -gt 0 -and $totalFrames -gt 0 -and $processedFrames -le $totalFrames) {
-                                    $remainingExecutionSeconds = ($totalFrames - $processedFrames) / $currentFps
+                                    $remainingFrames = $totalFrames - $processedFrames
+                                    $remainingExecutionSeconds = $remainingFrames / $currentFps
                                     $remainingTimeSpan = [TimeSpan]::FromSeconds($remainingExecutionSeconds)
                                     $percentComplete = ($processedFrames / $totalFrames) * 100
+
+                                    # Stelle sicher, dass der Prozentsatz nicht ueber 100 geht
                                     if ($percentComplete -gt 100) { $percentComplete = 100.0 }
 
+                                    # Aktuelle Dateigroesse abrufen und formatieren
                                     $currentSizeMB = 0
                                     if (Test-Path -LiteralPath $outputFile) {
+                                        # ErrorAction SilentlyContinue, falls die Datei gerade geschrieben wird und gesperrt ist
                                         $currentSizeMB = (Get-Item -LiteralPath $outputFile -ErrorAction SilentlyContinue).Length / 1MB
                                     }
                                     $progressText = "Fortschritt: {0:N2}% | Verbleibend: {1:hh\h\:mm\m\:ss\s} | FPS: {2:N0} | Größe: {3:N2} MB" -f $percentComplete, $remainingTimeSpan, $currentFps, $currentSizeMB
@@ -1381,21 +1256,23 @@ function Set-VolumeGain {
                                 }
                             }
                         }
+                        # Naechste Zeile asynchron lesen
                         $readTask = $process.StandardError.ReadLineAsync()
                     }
                 }
 
-                # Hang-Detection CPU Fallback
+                # Hang-Detection: Pruefen ob Timeout ueberschritten
                 if (((Get-Date) - $lastOutputTime).TotalSeconds -gt $hangTimeoutSeconds) {
                     $process.Kill()
-                    Write-Host "`nFEHLER: FFmpeg-Prozess (CPU) reagiert seit $hangTimeoutSeconds Sekunden nicht mehr." -ForegroundColor Red
+                    Write-Host "`nFEHLER: FFmpeg-Prozess reagiert seit $hangTimeoutSeconds Sekunden nicht mehr. Prozess wurde beendet." -ForegroundColor Red
                     throw "FFmpeg-Prozess haengt (Timeout)."
                 }
 
                 Start-Sleep -Milliseconds 50
             }
 
-            Write-Host "" # Zeilenumbruch
+            # Sorgt fuer einen sauberen Zeilenumbruch nach der einzeiligen Fortschrittsanzeige.
+            Write-Host ""
 
             $process.WaitForExit()
 
@@ -1442,17 +1319,22 @@ function Get-VmafScore {
         [hashtable]$sourceInfo
     )
 
-    # Verwende vorhandene Serien-/Resize-Infos: wenn Test-IsSeries fuer die Quelldatei eine Skalierung erzwingt,
-    # ist ein Frame-basierter VMAF-Vergleich nicht sinnvoll -> ueberspringen.
+    # Bei Resize/Force720p hat die Ausgabe eine andere Aufloesung als die Quelle.
+    # libvmaf braucht identische Aufloesung -> Ausgabe auf Quellaufloesung hochskalieren
+    # (Netflix-VMAF-Empfehlung: die kleinere/distorted Seite auf die Referenz skalieren).
+    $vmafFilter = "[0:v]setpts=PTS-STARTPTS[ref];[1:v]setpts=PTS-STARTPTS[dist];[ref][dist]libvmaf=n_subsample=5:n_threads=$([Environment]::ProcessorCount)"
     try {
-        if ($sourceInfo.resize -eq $true -or $sourceInfo.Force720p -eq $true) {
-            Write-Host "  VMAF: Resize/Force720p erkannt durch Test-IsSeries — VMAF wird übersprungen." -ForegroundColor Yellow
+        if (($sourceInfo.resize -eq $true -or $sourceInfo.Force720p -eq $true) -and $sourceInfo.Resolution -match "^(\d+)x(\d+)$") {
+            $srcWidth  = $matches[1]
+            $srcHeight = $matches[2]
+            Write-Host "  VMAF: Resize/Force720p erkannt — skaliere Ausgabe auf Quellaufloesung (${srcWidth}x${srcHeight}) fuer Vergleich." -ForegroundColor Cyan
+            $vmafFilter = "[0:v]setpts=PTS-STARTPTS[ref];[1:v]scale=${srcWidth}:${srcHeight}:flags=bicubic,setpts=PTS-STARTPTS[dist];[ref][dist]libvmaf=n_subsample=5:n_threads=$([Environment]::ProcessorCount)"
+        }
+        elseif ($sourceInfo.resize -eq $true -or $sourceInfo.Force720p -eq $true) {
+            Write-Host "  VMAF: Resize/Force720p erkannt, Quellaufloesung nicht lesbar — VMAF wird übersprungen." -ForegroundColor Yellow
             return $null
         }
-        else {
-            Write-Host "  VMAF: Keine Resize/Force720p-Erkennung — VMAF wird durchgeführt." -ForegroundColor Cyan
-            Write-Host "  Starte VMAF-Messung (Start: ${StartSec}s, Dauer: ${DurationSec}s, n_subsample=5)..." -ForegroundColor Cyan
-        }
+        Write-Host "  Starte VMAF-Messung (Start: ${StartSec}s, Dauer: ${DurationSec}s, n_subsample=5)..." -ForegroundColor Cyan
     }
     catch {
         # Fehler bei der Schnellprüfung ignorieren und normal weitermachen
@@ -1465,27 +1347,51 @@ function Get-VmafScore {
         # -t begrenzt die Analysedauer auf $DurationSec Sekunden ab dem Seekpunkt.
         # libvmaf n_subsample=5: jeden 5. Frame auswerten, ~80% schneller als vollstaendige Analyse.
         # KEIN hwaccel: libvmaf ist ein Software-Filter.
-        $startInfo.Arguments = "-ss $StartSec -i `"$SourceFile`" -ss $StartSec -i `"$OutputFile`" -t $DurationSec -lavfi `"[0:v][1:v]libvmaf=n_subsample=5`" -f null NUL"
+        $startInfo.Arguments = "-ss $StartSec -i `"$SourceFile`" -ss $StartSec -i `"$OutputFile`" -t $DurationSec -lavfi `"$vmafFilter`" -loglevel info -stats -f null NUL"
         $startInfo.RedirectStandardError = $true
         $startInfo.UseShellExecute       = $false
         $startInfo.CreateNoWindow        = $true
 
         $proc = New-Object System.Diagnostics.Process
         $proc.StartInfo = $startInfo
-
-        # Wächter starten, BEVOR der Prozess gestartet wird
-        $watcherJob = Start-Job -ScriptBlock {
-            param($p, $m)
-            Watch-FFmpegProcess -Process $p -Mode $m
-        } -ArgumentList $proc, '3'
-
         $proc.Start() | Out-Null
-        $output = $proc.StandardError.ReadToEnd()
-        $proc.WaitForExit()
 
-        # Wächter nach Abschluss stoppen und entfernen
-        if ($watcherJob.State -eq 'Running') { Stop-Job $watcherJob }
-        Remove-Job $watcherJob
+        $vmafLastOutputTime = Get-Date
+        $vmafHangTimeoutSec = 300
+        $vmafReadTask = $proc.StandardError.ReadLineAsync()
+        $outputBuilder = New-Object System.Text.StringBuilder
+
+        while (-not $proc.HasExited) {
+            if ($vmafReadTask.IsCompleted) {
+                $line = $vmafReadTask.Result
+                if ($null -ne $line) {
+                    $vmafLastOutputTime = Get-Date
+                    [void]$outputBuilder.AppendLine($line)
+
+                    $timeMatch = [regex]::Match($line, "time=(\d+):(\d{2}):(\d{2})\.(\d{2})")
+                    if ($timeMatch.Success) {
+                        $elapsedSec = [int]$timeMatch.Groups[1].Value * 3600 + [int]$timeMatch.Groups[2].Value * 60 + [int]$timeMatch.Groups[3].Value
+                        $percent = [math]::Min((($elapsedSec / [math]::Max($DurationSec, 1)) * 100), 100)
+                        Write-Host ("`r  VMAF-Fortschritt: {0:N1}% ({1}s / {2}s)" -f $percent, $elapsedSec, $DurationSec) -NoNewline -ForegroundColor Gray
+                    }
+                    $vmafReadTask = $proc.StandardError.ReadLineAsync()
+                }
+            }
+
+            if (((Get-Date) - $vmafLastOutputTime).TotalSeconds -gt $vmafHangTimeoutSec) {
+                $proc.Kill()
+                Write-Host "`n  VMAF: FFmpeg reagiert seit $vmafHangTimeoutSec Sekunden nicht mehr, Prozess beendet." -ForegroundColor Red
+                return $null
+            }
+
+            Start-Sleep -Milliseconds 50
+        }
+        Write-Host ""
+
+        $proc.WaitForExit()
+        $remaining = $proc.StandardError.ReadToEnd()
+        if ($remaining) { [void]$outputBuilder.Append($remaining) }
+        $output = $outputBuilder.ToString()
 
         if ($proc.ExitCode -ne 0) {
             Write-Host "  VMAF: FFmpeg fehlgeschlagen (Exit-Code $($proc.ExitCode))." -ForegroundColor Yellow
@@ -1618,81 +1524,68 @@ function Test-OutputFile {
     return $integrityResult # Gibt das Ergebnis der Integritaetspruefung zurueck.
 }
 function Invoke-IntegrityCheck {
-    param (
-        [string]$filePath,
-        [string]$ffmpegPath,
-        [string]$logDatei,
-        [int64]$totalFrames,
-        [string]$CheckType = "Integrität"
+    # Fuehrt eine FFmpeg-Integritaetspruefung fuer eine einzelne Datei durch und zeigt den Fortschritt an.
+    param(
+        [string]$FilePath,
+        [string]$CheckType, # "Quelle" oder "Ausgabe" fuer die Anzeige
+        [hashtable]$SourceInfo
     )
 
-    Write-Host "Starte Integritätsprüfung für: $(Split-Path $filePath -Leaf)..." -ForegroundColor Cyan
+    Write-Host "Starte Integritaetspruefung fuer $CheckType-Datei: $([System.IO.Path]::GetFileName($FilePath))"
 
-    try {
-        $processInfo = New-Object System.Diagnostics.ProcessStartInfo
-        $processInfo.FileName = $ffmpegPath
-        $processInfo.Arguments = "-v error -i `"$filePath`" -f null NUL"
-        $processInfo.RedirectStandardError = $true
-        $processInfo.UseShellExecute = $false
-        $processInfo.CreateNoWindow = $true
+    $arguments = @(
+        "-v", "error", # Nur kritische Fehler anzeigen
+        "-stats",      # Aber Fortschrittsstatistiken erzwingen
+        "-i", "`"$FilePath`"",
+        "-f", "null",
+        "-"
+    )
+    # Hardwarebeschleunigung nur hinzufuegen, wenn sie nicht explizit fuer die Quelle deaktiviert wurde.
+    if (-not $SourceInfo.NoAccel) {
+        $arguments = if ($hwaccelMethod) { @("-hwaccel", $hwaccelMethod) + $arguments } else { $arguments }
+    }
 
-        $process = New-Object System.Diagnostics.Process
-        $process.StartInfo = $processInfo
+    $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $processInfo.FileName = $ffmpegPath
+    $processInfo.Arguments = $arguments -join ' '
+    $processInfo.RedirectStandardError = $true
+    $processInfo.UseShellExecute = $false
+    $processInfo.CreateNoWindow = $true
 
-        # Wächter starten
-        $watcherJob = Start-Job -ScriptBlock {
-            param($p, $m)
-            Watch-FFmpegProcess -Process $p -Mode $m
-        } -ArgumentList $process, '3'
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $processInfo
+    $process.Start() | Out-Null
 
-        $process.Start() | Out-Null
+    $totalFrames = [math]::Round($SourceInfo.Duration1 * $SourceInfo.FPS)
+    $outputBuilder = New-Object System.Text.StringBuilder
 
-        $outputBuilder = New-Object System.Text.StringBuilder
+    while (-not $process.HasExited) {
+        $line = $process.StandardError.ReadLine()
+        if ($null -ne $line) {
+            [void]$outputBuilder.AppendLine($line)
+            if ($line -like "frame=*") {
+                $progressMatch = [regex]::Match($line, "frame=\s*(\d+)\s+fps=\s*([\d\.]+)")
+                if ($progressMatch.Success) {
+                    $processedFrames = [int64]$progressMatch.Groups[1].Value
+                    $currentFps = [double]$progressMatch.Groups[2].Value.Replace('.', ',')
 
-        # Die von dir vermisste Fortschritts-Schleife
-        while (-not $process.HasExited) {
-            $line = $process.StandardError.ReadLine()
-            if ($null -ne $line) {
-                [void]$outputBuilder.AppendLine($line)
-                if ($line -like "frame=*") {
-                    $progressMatch = [regex]::Match($line, "frame=\s*(\d+)\s+fps=\s*([\d\.]+)")
-                    if ($progressMatch.Success) {
-                        $processedFrames = [int64]$progressMatch.Groups[1].Value
-                        $currentFps = [double]$progressMatch.Groups[2].Value.Replace('.', ',')
-
-                        if ($currentFps -gt 0 -and $totalFrames -gt 0 -and $processedFrames -le $totalFrames) {
-                            $percentComplete = ($processedFrames / $totalFrames) * 100
-                            $progressText = "Pruefung ($CheckType): {0:N2}%" -f $percentComplete
-                            Write-Host "`r$progressText" -NoNewline -ForegroundColor Gray
-                        }
+                    if ($currentFps -gt 0 -and $totalFrames -gt 0 -and $processedFrames -le $totalFrames) {
+                        $percentComplete = ($processedFrames / $totalFrames) * 100
+                        $progressText = "Pruefung ($CheckType): {0:N2}%" -f $percentComplete
+                        Write-Host "`r$progressText" -NoNewline -ForegroundColor Gray
                     }
                 }
             }
         }
-
-        $process.WaitForExit()
-        Write-Host "" # Zeilenumbruch nach der Fortschrittsanzeige
-
-        # Wächter aufräumen
-        if ($watcherJob.State -eq 'Running') { Stop-Job $watcherJob }
-        Remove-Job $watcherJob
-
-        $errorOutput = $outputBuilder.ToString()
-
-        if ($process.ExitCode -eq 0 -and [string]::IsNullOrWhiteSpace($errorOutput)) {
-            Write-Host "  -> Integrität OK." -ForegroundColor Green
-            return [PSCustomObject]@{IsValid = $true; Errors = $null}
-        }
-        else {
-            Write-Host "  -> FEHLER: Integritätsprüfung fehlgeschlagen." -ForegroundColor Red
-            "`n==== FEHLER bei Integritätsprüfung von $($filePath): ====`n$errorOutput" | Add-Content -LiteralPath $logDatei
-            return [PSCustomObject]@{IsValid = $false; Errors = $errorOutput}
-        }
     }
-    catch {
-        Write-Host "  -> FEHLER: Ausnahme bei Integritätsprüfung: $_" -ForegroundColor Red
-        return [PSCustomObject]@{IsValid = $false; Errors = $_.ToString()}
+    Write-Host "" # Zeilenumbruch nach der Fortschrittsanzeige
+    $process.WaitForExit()
+
+    return [PSCustomObject]@{
+        ExitCode    = $process.ExitCode
+        ErrorOutput = $outputBuilder.ToString()
     }
+
 }
 function Test-FileIntegrity {
     # Überprueft die Integritaet einer Mediendatei, indem FFmpeg versucht, sie zu dekodieren. Fehler werden protokolliert.
@@ -1713,9 +1606,10 @@ function Test-FileIntegrity {
     )
 
     # Pruefung der Ausgabedatei
-$outputResult = Invoke-IntegrityCheck -FilePath $outputFile -ffmpegPath $ffmpegPath -CheckType "Ausgabe" -SourceInfo $sourceInfo
-    # Die Auswertung erfolgt ueber die Eigenschaft IsValid
-    $isOutputOk = $outputResult.IsValid
+    $outputResult = Invoke-IntegrityCheck -FilePath $outputFile -CheckType "Ausgabe" -SourceInfo $sourceInfo
+    # Bereinige die Fehlerausgabe von reinen Fortschrittsanzeigen, bevor sie geprueft wird.
+    $filteredErrorOutput = $outputResult.ErrorOutput -split [System.Environment]::NewLine | Where-Object { $_ -notlike "frame=*" } | Out-String
+    $isOutputOk = ($outputResult.ExitCode -eq 0 -and [string]::IsNullOrWhiteSpace($filteredErrorOutput)) -or ($outputResult.ErrorOutput -match "Application provided invalid, non monotonically increasing dts to muxer in stream 0")
 
     if ($isOutputOk) {
         Write-Host "OK: $outputFile" -ForegroundColor Green
@@ -1731,8 +1625,10 @@ $outputResult = Invoke-IntegrityCheck -FilePath $outputFile -ffmpegPath $ffmpegP
         Add-Content -LiteralPath $logDatei -Value "----------------------------------------"
 
         # Pruefung der Quelldatei
-        $sourceResult = Invoke-IntegrityCheck -FilePath $file -ffmpegPath $ffmpegPath -CheckType "Quelle" -SourceInfo $sourceInfo
-        $isSourceOk = $sourceResult.IsValid
+        $sourceResult = Invoke-IntegrityCheck -FilePath $file -CheckType "Quelle" -SourceInfo $sourceInfo
+        # Bereinige auch hier die Fehlerausgabe.
+        $filteredSourceErrorOutput = $sourceResult.ErrorOutput -split [System.Environment]::NewLine | Where-Object { $_ -notlike "frame=*" } | Out-String
+        $isSourceOk = ($sourceResult.ExitCode -eq 0 -and [string]::IsNullOrWhiteSpace($filteredSourceErrorOutput)) -or ($sourceResult.ErrorOutput -match "Application provided invalid, non monotonically increasing dts to muxer in stream 0")
 
         if ($isSourceOk) {
             # Quelle ist OK, aber Ausgabe fehlerhaft -> Fehler im Transcoding. Ausgabedatei wird geloescht.
@@ -1820,6 +1716,56 @@ function Remove-Files {
         "`n==== FEHLER bei Umbenennung/Loeschen: $_ ====" | Add-Content -LiteralPath $logDatei
     }
 }
+function Get-OptimalHwaccel {
+    param (
+        [string]$FFmpegPath = "ffmpeg",
+        [string]$SelectedEncoder
+    )
+    # 1. Alle von FFmpeg unterstützen HW-Beschleuniger dynamisch abfragen
+    $rawAccels = try {
+        & $FFmpegPath -hide_banner -hwaccels 2>&1 |
+            Where-Object { $_ -notmatch "Hardware acceleration methods:" -and $_.Trim() -ne "" } |
+            ForEach-Object { $_.Trim() }
+    } catch {
+        @()
+    }
+    if ($rawAccels.Count -eq 0) {
+        return $null
+    }
+    # 2. Hersteller-spezifische Prioritätenlisten definieren
+    $priorityList = @()
+    if ($SelectedEncoder -like "*_amf") {
+        # AMD Priorität: Modernes D3D12VA -> DXVA2 (sehr stabil mit AMF) -> D3D11VA -> Vulkan -> OpenCL
+        $priorityList = @("d3d11va", "d3d12va", "vulkan", "dxva2", "opencl", "vaapi")
+    }
+    elseif ($SelectedEncoder -like "*_nvenc") {
+        # NVIDIA Priorität: Native NVDEC (cuda) -> D3D12VA -> D3D11VA -> Vulkan -> DXVA2
+        $priorityList = @("cuda", "nvdec", "d3d12va", "d3d11va", "vulkan", "dxva2")
+    }
+    elseif ($SelectedEncoder -like "*_qsv") {
+        # Intel QSV Priorität: Nativ QSV -> D3D12VA -> D3D11VA -> DXVA2 -> VAAPI
+        $priorityList = @("qsv", "d3d12va", "d3d11va", "dxva2", "vaapi")
+    }
+    elseif ($SelectedEncoder -like "*_vaapi") {
+        # Linux / Generic VAAPI
+        $priorityList = @("vaapi", "vulkan")
+    }
+    elseif ($SelectedEncoder -like "*_videotoolbox") {
+        # macOS Apple Silicon / Intel
+        $priorityList = @("videotoolbox")
+    }
+    else {
+        # Generischer Fallback (z. B. bei Software-Encodern wie libx264/libsvtav1)
+        $priorityList = @("d3d12va", "cuda", "d3d11va", "dxva2", "qsv", "vaapi", "vulkan", "videotoolbox")
+    }
+    # 3. Erste Übereinstimmung aus der Prioritätenliste wählen
+    foreach ($accel in $priorityList) {
+        if ($rawAccels -contains $accel) {
+            return $accel
+        }
+    }
+    return $null
+}
 #endregion
 
 #region Hauptskript
@@ -1829,15 +1775,24 @@ if ($useHardwareAccel -eq $true) {
     $videoEncoder = Get-HardwareEncoder -ffmpegPath $ffmpegPath
 }
 
+# Optimale HW-Beschleunigungsmethode fuer den gewaehlten Encoder einmalig ermitteln und cachen,
+# damit nicht bei jeder Datei erneut "ffmpeg -hwaccels" aufgerufen wird.
+$hwaccelMethod = Get-OptimalHwaccel -FFmpegPath $ffmpegPath -SelectedEncoder $videoEncoder
+
+if ($hwaccelMethod) {
+    Write-Host "Gewaehlte Hardwarebeschleunigung (Decoding): $hwaccelMethod" -ForegroundColor Cyan
+}
+else {
+    Write-Host "Keine passende Hardwarebeschleunigung gefunden, Decoding erfolgt per Software." -ForegroundColor Yellow
+}
+
 # Zeigt einen Dialog zur Auswahl des zu verarbeitenden Ordners an.
 Add-Type -AssemblyName System.Windows.Forms
 
 # GetForegroundWindow() holt das Handle des aktuell aktiven Fensters (VSCode) zum Zeitpunkt
 # des Scriptstarts. Das ist zuverlaessiger als MainWindowHandle, das im VSCode-Terminal
 # IntPtr.Zero zurueckgibt weil der PowerShell-Prozess kein eigenes Top-Level-Fenster hat.
-# Prueft ob der Typ bereits existiert, um Mehrfachdefinition zu vermeiden
-if (-not ("ForegroundWindowOwner" -as [type])) {
-    Add-Type -TypeDefinition @"
+Add-Type -TypeDefinition @"
 using System;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
@@ -1846,7 +1801,6 @@ public class ForegroundWindowOwner : IWin32Window {
     public IntPtr Handle { get { return GetForegroundWindow(); } }
 }
 "@ -ReferencedAssemblies System.Windows.Forms
-}
 
 $dialogOwner = New-Object ForegroundWindowOwner
 
@@ -1877,8 +1831,7 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
 
     $mkvFiles = [System.IO.Directory]::EnumerateFiles($destFolder, '*.*', [System.IO.SearchOption]::AllDirectories) |
         Where-Object {
-            ($extensions -contains [System.IO.Path]::GetExtension($_).ToLowerInvariant()) -and
-            ((Get-Item (Split-Path -Path $_ -Parent)).Name -ne "Fertig")
+            $extensions -contains [System.IO.Path]::GetExtension($_).ToLowerInvariant()
         } |
         ForEach-Object {
             $fileCount++
@@ -1943,6 +1896,7 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
         }
     }
     Write-Progress -Activity "Werte Ergebnisse der Tag-Prüfung aus" -Completed
+    Write-Host "Bereits normalisiert (uebersprungen): $($script:filesnorm.Count) Dateien" -ForegroundColor DarkGray
 
     # Zweite Schleife: Verarbeitet nur die Dateien, die in der ersten Schleife als "nicht normalisiert" identifiziert wurden.
     $mkvFileCount = ($script:filesnotnorm | Measure-Object).Count
@@ -1952,7 +1906,6 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
         if ($previousIgnoreFile -and (Test-Path $previousIgnoreFile)) {
             Remove-Item -Path $previousIgnoreFile -Force -ErrorAction SilentlyContinue
         }
-
 
         # Erstelle .embyignore-Datei fuer aktuelle Datei
         $ignoreFile = Join-Path (Get-Item -LiteralPath $file).DirectoryName ".embyignore"
@@ -2051,6 +2004,7 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
                         }
 
                         $crfAdjust -= 2
+
                         $retryCrfTargets = [math]::Max($crfTargets + $crfAdjust, 14)
                         $retryCrfTargetm = [math]::Max($crfTargetm + $crfAdjust, 14)
                         Write-Host "VMAF-Retry $retryCount/$vmafMaxRetries : Neuer Encode mit CRF-Anpassung $crfAdjust (Serien-Basis: $retryCrfTargets, Film-Basis: $retryCrfTargetm)..." -ForegroundColor Yellow
@@ -2082,7 +2036,10 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
 
                     # VMAF nur messen wenn Validierung OK und Video tatsaechlich recodiert wurde.
                     if ($isOutputOk -and -not $videocopy) {
-                            $finalVmaf = Get-VmafScore -SourceFile $file -OutputFile $outputFile -StartSec $vmafStartSec -DurationSec $vmafDurationSec -sourceInfo $sourceInfo
+                        $finalVmaf = Get-VmafScore -SourceFile $file -OutputFile $outputFile -StartSec $vmafStartSec -DurationSec $vmafDurationSec -sourceInfo $sourceInfo
+                        if ($null -ne $finalVmaf) {
+                            $bestVmaf = $finalVmaf
+                        }
 
                         # Retry ausloesen wenn: AutoRetry aktiv, Score ausserhalb Toleranzzone, noch Versuche uebrig.
                         # Toleranzzone: Scores zwischen ($vmafMinScore - $vmafTolerance) und $vmafMinScore
