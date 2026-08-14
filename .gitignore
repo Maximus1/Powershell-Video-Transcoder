@@ -17,3 +17,4 @@ chatlog.txt
 .codacy-token
 Fetch-CodacyIssues.ps1
 codacy-live-issues.txt
+CalibrationData.json

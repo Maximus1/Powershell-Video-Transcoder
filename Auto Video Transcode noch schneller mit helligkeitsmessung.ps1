@@ -1,12 +1,18 @@
 #region Konfiguration
 # Pfad zur FFmpeg-Anwendung. Dieser muss korrekt gesetzt sein, damit das Skript funktioniert.
-$ffmpegPath = "F:\media-autobuild_suite-master\local64\bin-video\ffmpeg.exe"
+$ffmpegPath = "F:\media-autobuild_suite\local64\bin-video\ffmpeg.exe"
 # Pfad zur mkvextract-Anwendung aus dem MKVToolNix-Paket.
 $mkvextractPath = "C:\Program Files\MKVToolNix\mkvextract.exe"
 # Ziel-Lautheit in LUFS fuer die Audionormalisierung (z.B. -18 fuer eine konsistente Lautstaerke).
 $targetLoudness = -18
 # Liste der zu verarbeitenden Dateiendungen.
 $extensions = @('.mkv', '.mp4', '.avi', '.m2ts')
+
+# Speichert nach jedem erfolgreichen Transcode einen Eintrag (Groesse/Aufloesung/VMAF) in einer
+# einzigen, kumulativ wachsenden JSON-Datei neben diesem Skript. Nuetzlich, um Measure-ExpectedSizeMB
+# anhand echter eigener Werte nachzukalibrieren, ohne Daten manuell aus MediaInfo abzutippen.
+$enableCalibrationLogging = $false
+$calibrationLogFile = Join-Path $PSScriptRoot "CalibrationData.json"
 
 #Nutze Hardwarebeschleunigung (encoding) wenn moeglich
 $useHardwareAccel = $true # Setze auf $true, um Hardwarebeschleunigung zu verwenden, wenn verfuegbar.
@@ -23,7 +29,6 @@ $crfTargetm = 18 # CRF fuer Filme
 $crfTargets = 20 # Etwas hoeherer CRF fuer Serien zur besseren Kompression.
 # Der Ziel-Videocodec fuer die Transkodierung.
 $targetVideoCodec = 'HEVC' # Alle Videos werden in HEVC (H.265) kodiert.
-
 # Zieldateiendung fuer alle verarbeiteten Dateien.
 $targetExtension = '.mkv' # Alle Ausgabedateien werden im MKV-Container gespeichert.
 # Array zum Sammeln von Dateien, die noch nicht normalisiert wurden und verarbeitet werden muessen.
@@ -143,25 +148,36 @@ function Test-IsNormalized {
         return [PSCustomObject]@{ FilePath = $file; IsNormalized = $false; ErrorMessage = "mkvextract.exe nicht gefunden" }
     }
 
-    # Erstellt eine temporaere XML-Datei, um die Tag-Ausgabe von mkvextract zu speichern.
-    $tempXml = [System.IO.Path]::GetTempFileName()
-
     try {
-        # Extrahiert die Metadaten-Tags der Videodatei und leitet sie in die temporaere XML-Datei um.
-        & $mkvextractPath tags "$file" > $tempXml 2>$null
+        # Direktes Erfassen der Ausgabe ueber .NET Process, mit explizit erzwungener UTF-8-Dekodierung
+        # (mkvextract gibt IMMER UTF-8 aus; die PowerShell-Konsolen-Codepage kann davon abweichen und
+        # Umlaute/Sonderzeichen korrumpieren, wenn man stattdessen den "&"-Operator + Out-String nutzt).
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $mkvextractPath
+        $psi.Arguments = "tags `"$file`""
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
 
-        # Liest den gesamten Inhalt der XML-Datei.
-        $xmlText = Get-Content -Path $tempXml -Raw -Encoding UTF8
+        $proc = New-Object System.Diagnostics.Process
+        $proc.StartInfo = $psi
+        $proc.Start() | Out-Null
+        $xmlText = $proc.StandardOutput.ReadToEnd()
+        $proc.StandardError.ReadToEnd() | Out-Null
+        $proc.WaitForExit()
 
         if ([string]::IsNullOrWhiteSpace($xmlText)) {
-            throw "Extrahierter XML-Inhalt ist leer oder ungueltig."
+            # Leere Ausgabe ist der Normalfall bei Dateien ohne jede Tags-Sektion im Container
+            # (z.B. frische, noch nie verarbeitete Dateien) - kein Fehler, sondern schlicht "nicht normalisiert".
+            return [PSCustomObject]@{ FilePath = $file; IsNormalized = $false }
         }
         # Versucht, den Text als XML zu parsen. Schlaegt dies fehl, ist es wahrscheinlich keine gueltige MKV-Datei.
         try {
             [xml]$xml = $xmlText
         }
         catch {
-            # Gibt ein Objekt zurück, das den Status anzeigt
             return [PSCustomObject]@{ FilePath = $file; IsNormalized = $false; Warning = "Konnte XML nicht parsen (vermutlich keine MKV): $file" }
         }
 
@@ -176,14 +192,7 @@ function Test-IsNormalized {
         }
     }
     catch {
-        # Faengt alle Fehler waehrend der Verarbeitung ab (z.B. bei beschaedigten Dateien) und stuft die Datei sicherheitshalber als "nicht normalisiert" ein.
-        # Gibt ein Objekt zurück, das den Status anzeigt
         return [PSCustomObject]@{ FilePath = $file; IsNormalized = $false; Warning = "Fehler beim Verarbeiten von $file`nGrund: $_"; ErrorMessage = $_ }
-    }
-    finally {
-        if (Test-Path $tempXml) {
-            Remove-Item $tempXml -Force
-        }
     }
 }
 function Get-MediaInfo {
@@ -214,11 +223,20 @@ function Get-MediaInfo {
     $mediaInfo += Get-RecodeAnalysis -MediaInfo $mediaInfo -logDatei $logDatei
 
     # Helligkeitsanalyse (nur SDR, per FFmpeg signalstats – keine externen Tools noetig).
-    # Ergebnis wird als BrightnessAvg gespeichert ($null wenn HDR oder Analyse fehlgeschlagen).
-    Write-Host "--------------------------------------------------" -ForegroundColor DarkGray
-    $brightnessResult = Get-VideoBrightnessInfo -FilePath $filePath -Duration $mediaInfo.Duration -IsHDR $mediaInfo.HDR
-    $mediaInfo.BrightnessAvg = $brightnessResult
-    Write-Host "--------------------------------------------------" -ForegroundColor DarkGray
+    # Ergebnis wird als BrightnessAvg gespeichert ($null wenn HDR, kein Transcode oder Analyse fehlgeschlagen).
+    # Nur ausfuehren wenn tatsaechlich ein Video-Transcode ansteht (siehe Bedingung in Set-VolumeGain,
+    # Zeile ~880) - bei reinem Audio-Remux (Video wird kopiert) wird der Wert nie verwendet.
+    $needsBitDepthChange = ($mediaInfo.BitDepth -ne 8)
+    $willTranscodeVideo = $mediaInfo.RecodeRecommended -or $mediaInfo.Force720p -or $needsBitDepthChange -or ($mediaInfo.FPS -gt 25.1)
+    if ($willTranscodeVideo) {
+        Write-Host "--------------------------------------------------" -ForegroundColor DarkGray
+        $brightnessResult = Get-VideoBrightnessInfo -FilePath $filePath -Duration $mediaInfo.Duration -IsHDR $mediaInfo.HDR
+        $mediaInfo.BrightnessAvg = $brightnessResult
+        Write-Host "--------------------------------------------------" -ForegroundColor DarkGray
+    }
+    else {
+        $mediaInfo.BrightnessAvg = $null
+    }
 
     # Speichert die urspruenglichen Dauer-Werte, da sie in spaeteren Analysen ueberschrieben werden koennten.
     if ($mediaInfo.Duration -and -not $mediaInfo.ContainsKey("Duration1")) {
@@ -337,52 +355,105 @@ function Get-ColorAndHDRInfo {
     return $info
 }
 function Get-AudioInfo {
-    # Extrahiert Audio-Metadaten (Kanalanzahl und Codec) aus der FFmpeg-Ausgabe.
+    # Extrahiert Audio-Metadaten (Kanalanzahl, Codec, Profil, Sample-Rate, Bitrate, Layout und Sample-Format) aus der FFmpeg-Ausgabe.
     param ([string]$Output)
     $info = @{
         AudioChannels = 0
         AudioCodec = "unknown"
+        AudioCodecFamily = "unknown"
+        AudioCodecProfile = ""
+        AudioCodecDetails = ""
+        AudioSampleRate = 0
+        AudioSampleFormat = ""
+        AudioBitRate = ""
+        AudioLayout = ""
+        AudioBitDepth = $null
     }
 
-    # 1. Extrahiert den Audio-Codec
-    if ($Output -match "Audio:\s*([a-zA-Z0-9_\-]+)") {
+    $audioDescriptor = $null
+    $audioMatches = [regex]::Matches($Output, '(?im)Stream\s+#\d+:\d+(?:\([^\)]+\))?:\s+Audio:\s*(.+)')
+    if ($audioMatches.Count -gt 0) {
+        $audioDescriptor = $audioMatches[$audioMatches.Count - 1].Groups[1].Value.Trim()
+    }
+    elseif ($Output -match '(?im)Audio:\s*(.+)') {
+        $audioDescriptor = $matches[1].Trim()
+    }
+
+    if (-not $audioDescriptor) {
+        return $info
+    }
+
+    $normalizedDescriptor = $audioDescriptor -replace '\s+', ' '
+
+    # 1. Extrahiert den Audio-Codec und optional sein Profil (z. B. "aac (LC)")
+    if ($normalizedDescriptor -match '^\s*([a-zA-Z0-9._+-]+)') {
         $info.AudioCodec = $matches[1].ToLower()
+        $info.AudioCodecDetails = $matches[1]
     }
 
-    # 2. Extrahiert die Kanalanzahl
-    if ($Output -match "Audio:.*") {
-        $audioLine = $matches[0]
+    if ($normalizedDescriptor -match '^\S+\s*\(([^)]+)\)') {
+        $info.AudioCodecProfile = $matches[1].Trim()
+    }
 
-        # Pruefe auf "X channels" (z.B. "6 channels" oder "5.1 channels")
-        if ($audioLine -match "(\d+(\.\d+)?)\s*channels?") {
-            $chanVal = $matches[1]
-            if ($chanVal -match "^(\d+)\.(\d+)$") {
-                $info.AudioChannels = [int]$matches[1] + [int]$matches[2]
-            } else {
-                $info.AudioChannels = [int]$chanVal
+    switch -Regex ($info.AudioCodec) {
+        '^(aac|mp4a)$' { $info.AudioCodecFamily = 'aac' }
+        '^(ac3|eac3)$' { $info.AudioCodecFamily = $info.AudioCodec }
+        '^opus$' { $info.AudioCodecFamily = 'opus' }
+        '^mp3$' { $info.AudioCodecFamily = 'mp3' }
+        '^flac$' { $info.AudioCodecFamily = 'flac' }
+        '^alac$' { $info.AudioCodecFamily = 'alac' }
+        '^(dts|dtshd|dts-hd)$' { $info.AudioCodecFamily = 'dts' }
+        '^(truehd|mlp)$' { $info.AudioCodecFamily = 'truehd' }
+        '^pcm' { $info.AudioCodecFamily = 'pcm' }
+        default { $info.AudioCodecFamily = $info.AudioCodec }
+    }
+
+    # 2. Extrahiert weitere Details wie Sample-Rate, Bitrate, Layout und Sample-Format aus dem Audio-Descriptor.
+    $audioTokens = $normalizedDescriptor -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+    foreach ($token in $audioTokens) {
+        if ($token -match '(\d+)\s*Hz') {
+            $info.AudioSampleRate = [int]$matches[1]
+        }
+        elseif ($token -match '(\d+)\s*kb/s') {
+            $info.AudioBitRate = $matches[1]
+        }
+        elseif ($token -match '^(fltp|s16p|s32p|s16|s24|s32|s8|u8|u16|u24|u32|dbl|f32|f64)$') {
+            $info.AudioSampleFormat = $token
+            if ($token -match 's(\d+)|u(\d+)|f(\d+)') {
+                $info.AudioBitDepth = [int]$matches[1]
             }
         }
-        # Pruefe auf Standard-Layouts oder X.Y Notation nach der Frequenz
-        elseif ($audioLine -match "\d+\s*Hz,\s*([^,]+)") {
-            $layoutPart = $matches[1].Trim()
-            switch -Regex ($layoutPart) {
-                "mono"      { $info.AudioChannels = 1; break }
-                "stereo"    { $info.AudioChannels = 2; break }
-                "2\.1"      { $info.AudioChannels = 3; break }
-                "quad"      { $info.AudioChannels = 4; break }
-                "5\.0"      { $info.AudioChannels = 5; break }
-                "5\.1"      { $info.AudioChannels = 6; break }
-                "6\.1"      { $info.AudioChannels = 7; break }
-                "7\.1"      { $info.AudioChannels = 8; break }
-                "^(\d+)\.(\d+)" {
+        elseif (($token -replace '\([^)]*\)', '').Trim() -match '^(mono|stereo|quad|2\.1|3\.0|4\.0|5\.0|5\.1|6\.1|7\.1|[0-9]+(?:\.[0-9]+)?)$') {
+            $layoutToken = ($token -replace '\([^)]*\)', '').Trim()
+            $info.AudioLayout = $layoutToken
+            switch -Regex ($layoutToken) {
+                'mono'      { $info.AudioChannels = 1; break }
+                'stereo'    { $info.AudioChannels = 2; break }
+                '2\.1'      { $info.AudioChannels = 3; break }
+                'quad'      { $info.AudioChannels = 4; break }
+                '5\.0'      { $info.AudioChannels = 5; break }
+                '5\.1'      { $info.AudioChannels = 6; break }
+                '6\.1'      { $info.AudioChannels = 7; break }
+                '7\.1'      { $info.AudioChannels = 8; break }
+                '^(\d+)\.(\d+)$' {
                     $info.AudioChannels = [int]$matches[1] + [int]$matches[2]
                     break
                 }
-                "^(\d+)$" {
+                '^(\d+)$' {
                     $info.AudioChannels = [int]$matches[1]
                     break
                 }
             }
+        }
+    }
+
+    # 3. Fallback fuer Formate wie "6 channels" oder "5.1 channels"
+    if ($info.AudioChannels -eq 0 -and $normalizedDescriptor -match '(\d+(\.\d+)?)\s*channels?') {
+        $chanVal = $matches[1]
+        if ($chanVal -match '^(\d+)\.(\d+)$') {
+            $info.AudioChannels = [int]$matches[1] + [int]$matches[2]
+        } else {
+            $info.AudioChannels = [int]$chanVal
         }
     }
 
@@ -485,44 +556,51 @@ function Get-RecodeAnalysis {
         $fileSizeMB = $fileSizeBytes / 1MB
         $duration = $mediaInfo.Duration
         # Berechnet die erwartete Dateigroeße basierend auf der Laufzeit und vordefinierten Qualitaetsraten.
-        $expectedSizeMB = Measure-ExpectedSizeMB -durationSeconds $duration -isSeries $mediaInfo.IsSeries -logDatei $logDatei
+        $expectedSizeMB = Measure-ExpectedSizeMB -durationSeconds $duration -isSeries $mediaInfo.IsSeries -resolution $mediaInfo.Resolution -logDatei $logDatei
         # Empfiehlt eine Neukodierung, wenn die Datei signifikant (hier >50%) groeßer als erwartet ist.
         if ($fileSizeMB -gt ($expectedSizeMB * 1.5)) {
             $info = @{ RecodeRecommended = $true }
-            Write-Host "Recode empfohlen: Datei ist deutlich groeßer als erwartet ($([math]::Round($fileSizeMB,2)) MB > $expectedSizeMB MB)" -ForegroundColor Yellow
-            "`n==== Recode empfohlen: Datei ist deutlich groeßer als erwartet ($([math]::Round($fileSizeMB,2)) MB > $expectedSizeMB MB) ====" | Add-Content -LiteralPath $logDatei
+            $sizeThresholdMB = [math]::Round($expectedSizeMB * 1.5, 2)
+            Write-Host "Recode empfohlen: Datei ist deutlich groeßer als erwartet ($([math]::Round($fileSizeMB,2)) MB > $sizeThresholdMB MB [150% von $expectedSizeMB MB])" -ForegroundColor Yellow
+            "`n==== Recode empfohlen: Datei ist deutlich groeßer als erwartet ($([math]::Round($fileSizeMB,2)) MB > $sizeThresholdMB MB [150% von $expectedSizeMB MB]) ====" | Add-Content -LiteralPath $logDatei
         }
         else {
             $info = @{ RecodeRecommended = $false }
-            Write-Host "Kein Recode noetig: Dateigroeße ist im erwarteten Bereich ($([math]::Round($fileSizeMB,2)) MB ≤ $expectedSizeMB MB)" -ForegroundColor Green
-            "`n==== Kein Recode noetig: Dateigroeße ist im erwarteten Bereich ($([math]::Round($fileSizeMB,2)) MB ≤ $expectedSizeMB MB) ====" | Add-Content -LiteralPath $logDatei
+            $sizeThresholdMB = [math]::Round($expectedSizeMB * 1.5, 2)
+            Write-Host "Kein Recode noetig: Dateigroeße ist im erwarteten Bereich ($([math]::Round($fileSizeMB,2)) MB ≤ $sizeThresholdMB MB [150% von $expectedSizeMB MB])" -ForegroundColor Green
+            "`n==== Kein Recode noetig: Dateigroeße ist im erwarteten Bereich ($([math]::Round($fileSizeMB,2)) MB ≤ $sizeThresholdMB MB [150% von $expectedSizeMB MB]) ====" | Add-Content -LiteralPath $logDatei
         }
     }
 
     return $info
 }
 function Measure-ExpectedSizeMB {
-    # Berechnet eine erwartete Zieldateigroeße in MB basierend auf der Videolaenge und unterschiedlichen Raten fuer Filme und Serien.
+    # Berechnet eine erwartete Zieldateigroeße in MB basierend auf Videolaenge UND Aufloesung
+    # (MB pro Sekunde PRO MEGAPIXEL statt eines pauschalen MB/s-Werts), damit 720p- und 1080p/4K-
+    # Inhalte nicht denselben Erwartungswert bekommen. Kalibriert anhand echter Referenzwerte:
+    # Serie 720p (0,92 MP) HEVC bei VMAF ~93-95 lag real bei ~0,06-0,10 MB/s -> ~0,087 MB/s/MP ("hoch").
+    # Film 1080p (2,07 MP) HEVC lag real bei ~0,248 MB/s -> ~0,120 MB/s/MP ("hoch").
     param (
-        # Berechnet eine erwartete Zieldateigroeße in MB basierend auf der Videolaenge und unterschiedlichen Raten fuer Filme und Serien.
         [double]$durationSeconds,
         [bool]$isSeries,
+        [string]$resolution,
         [string]$logDatei
     )
 
-    # Vordefinierte Bitraten (in MB pro Sekunde) fuer verschiedene Qualitaetsstufen bei Filmen.
+    # Vordefinierte Bitraten (in MB pro Sekunde PRO MEGAPIXEL) fuer verschiedene Qualitaetsstufen bei Filmen.
+    # "hoch" kalibriert als Mittelwert aus zwei realen 1080p-Referenzfilmen (0,12 und 0,140 MB/s/MP).
     $filmRates = @{
-        "niedrig"  = 0.25
-        "mittel"   = 0.4
-        "hoch"     = 0.7
-        "sehrhoch" = 1.0
+        "niedrig"  = 0.047
+        "mittel"   = 0.075
+        "hoch"     = 0.13
+        "sehrhoch" = 0.185
     }
-    # Vordefinierte Bitraten (in MB pro Sekunde) fuer verschiedene Qualitaetsstufen bei Serien.
+    # Vordefinierte Bitraten (in MB pro Sekunde PRO MEGAPIXEL) fuer verschiedene Qualitaetsstufen bei Serien.
     $serieRates = @{
-        "niedrig"  = 0.1
-        "mittel"   = 0.14
-        "hoch"     = 0.3
-        "sehrhoch" = 0.5
+        "niedrig"  = 0.029
+        "mittel"   = 0.041
+        "hoch"     = 0.087
+        "sehrhoch" = 0.145
     }
 
     # Waehlt die passende Raten-Tabelle und Qualitaetsstufe basierend auf dem Medientyp.
@@ -542,8 +620,14 @@ function Measure-ExpectedSizeMB {
         $quality = "mittel"
     }
 
-    $mbPerSecond = $rates[$quality]
-    $expectedSizeMB = [math]::Round($mbPerSecond * $durationSeconds, 2)
+    # Aufloesung in Megapixel umrechnen. Fallback auf 1080p (2,07 MP), falls Aufloesung nicht lesbar ist.
+    $megapixels = 2.07
+    if ($resolution -match "^(\d+)x(\d+)$") {
+        $megapixels = ([double]$matches[1] * [double]$matches[2]) / 1000000
+    }
+
+    $mbPerSecondPerMP = $rates[$quality]
+    $expectedSizeMB = [math]::Round($mbPerSecondPerMP * $megapixels * $durationSeconds, 2)
     return $expectedSizeMB
 }
 function Get-VideoBrightnessInfo {
@@ -716,20 +800,12 @@ function Get-LoudnessInfo {
         Write-Host "Starte FFmpeg zur Lautstaerkeanalyse..." -ForegroundColor Cyan
         "`n==== Starte FFmpeg zur Lautstaerkeanalyse fuer $filePath ====" | Add-Content -LiteralPath $logDatei
 
-        # Stellt die Basis-Argumente fuer die Lautheitsanalyse zusammen.
-        $baseArgs = @(
+        # KEIN hwaccel: -vn schliesst Video komplett aus, der Filter arbeitet nur auf [0:a:0].
+        # Hardware-Decode-Initialisierung waere hier reine Zeitverschwendung ohne jeden Nutzen.
+        $ffmpegArguments = @(
             "-i", "`"$filePath`"", "-vn", "-hide_banner", "-loglevel", "info", "-stats", "-threads", "12",
             "-filter_complex", "[0:a:0]ebur128=metadata=1", "-f", "null", "NUL"
         )
-
-        $ffmpegArguments = @()
-        # Fuegt die Hardwarebeschleunigung hinzu, außer sie wurde explizit deaktiviert (z.B. fuer AV1).
-        if ($sourceInfo.NoAccel -eq $true) {
-            $ffmpegArguments = $baseArgs
-        }
-        else {
-            $ffmpegArguments = if ($hwaccelMethod) { @("-hwaccel", $hwaccelMethod) + $baseArgs } else { $baseArgs }
-        }
 
         $processInfo = New-Object System.Diagnostics.ProcessStartInfo
         $processInfo.FileName = $ffmpegPath
@@ -742,8 +818,46 @@ function Get-LoudnessInfo {
         $process.StartInfo = $processInfo
         $process.Start() | Out-Null
 
-        $ffmpegOutput = $process.StandardError.ReadToEnd()
+        # Live-Fortschritt mitlesen statt blockierend auf das Prozessende zu warten (analog Haupt-Encode/VMAF).
+        $totalDurationSec = [double]$sourceInfo.Duration1
+        $lastOutputTime = Get-Date
+        $hangTimeoutSeconds = 300
+        $readTask = $process.StandardError.ReadLineAsync()
+        $outputBuilder = New-Object System.Text.StringBuilder
+
+        while (-not $process.HasExited) {
+            if ($readTask.IsCompleted) {
+                $line = $readTask.Result
+                if ($null -ne $line) {
+                    $lastOutputTime = Get-Date
+                    [void]$outputBuilder.AppendLine($line)
+
+                    $timeMatch = [regex]::Match($line, "time=(\d+):(\d{2}):(\d{2})\.(\d{2})")
+                    if ($timeMatch.Success -and $totalDurationSec -gt 0) {
+                        $elapsedSec = [int]$timeMatch.Groups[1].Value * 3600 + [int]$timeMatch.Groups[2].Value * 60 + [int]$timeMatch.Groups[3].Value
+                        $percent = [math]::Min((($elapsedSec / $totalDurationSec) * 100), 100)
+                        Write-Host ("`r  Lautstaerkeanalyse-Fortschritt: {0:N1}%" -f $percent) -NoNewline -ForegroundColor Gray
+                    }
+                    $readTask = $process.StandardError.ReadLineAsync()
+                }
+            }
+
+            if (((Get-Date) - $lastOutputTime).TotalSeconds -gt $hangTimeoutSeconds) {
+                Write-Host "`nFEHLER: FFmpeg-Prozess (Lautstaerkeanalyse) reagiert seit $hangTimeoutSeconds Sekunden nicht mehr." -ForegroundColor Red
+                try {
+                    Start-Process -FilePath "taskkill.exe" -ArgumentList "/F", "/T", "/PID", $process.Id -WindowStyle Hidden -ErrorAction SilentlyContinue
+                } catch {}
+                return $null
+            }
+
+            Start-Sleep -Milliseconds 50
+        }
+        Write-Host ""
+
         $process.WaitForExit()
+        $remaining = $process.StandardError.ReadToEnd()
+        if ($remaining) { [void]$outputBuilder.Append($remaining) }
+        $ffmpegOutput = $outputBuilder.ToString()
         return $ffmpegOutput
     }
     catch {
@@ -752,6 +866,52 @@ function Get-LoudnessInfo {
         return $null
     }
 }
+function Get-AacAudioEncodingArgs {
+    param (
+        [hashtable]$SourceInfo,
+        [int]$AudioChannels
+    )
+
+    $codecFamily = if ($SourceInfo.AudioCodecFamily) { $SourceInfo.AudioCodecFamily } else { $SourceInfo.AudioCodec }
+    # aac_low ist der konservativste AAC-Profileintrag: er bleibt kompatibel, erzeugt keine unnötig große Datei
+    # und ist für die meisten Transcodes eine gute Balance aus Qualität und Größe.
+    $audioprofile = 'aac_low'
+    $bitrateK = if ($AudioChannels -le 1) { 96 } elseif ($AudioChannels -eq 2) { 128 } else { 160 }
+
+    switch ($codecFamily) {
+        'aac' { $audioprofile = 'aac_low' }
+        'mp3' { $audioprofile = 'aac_low' }
+        # Der native FFmpeg-aac-Encoder unterstuetzt kein HE-AAC (nur libfdk_aac koennte das) -
+        # daher bleibt es hier bei aac_low, auch fuer Opus-Quellen.
+        'opus' { $audioprofile = 'aac_low' }
+        'flac' { $audioprofile = 'aac_low' }
+        'pcm' { $audioprofile = 'aac_low' }
+        'ac3' { $audioprofile = 'aac_low' }
+        'eac3' { $audioprofile = 'aac_low' }
+        'dts' { $audioprofile = 'aac_low' }
+        'truehd' { $audioprofile = 'aac_low' }
+        default { $audioprofile = 'aac_low' }
+    }
+
+    if ($SourceInfo.AudioBitRate) {
+        $parsedBitrate = 0
+        if ([int]::TryParse([string]$SourceInfo.AudioBitRate, [ref]$parsedBitrate) -and $parsedBitrate -gt 0) {
+            if ($AudioChannels -le 2) {
+                $bitrateK = [math]::Min([math]::Max([int][math]::Round($parsedBitrate * 0.75), 96), 160)
+            }
+            else {
+                $bitrateK = [math]::Min([math]::Max([int][math]::Round($parsedBitrate * 0.5), 160), 320)
+            }
+        }
+    }
+
+    return [PSCustomObject]@{
+        Profile = $audioprofile
+        BitrateK = $bitrateK
+        Bitrate = "{0}k" -f $bitrateK
+    }
+}
+
 function Set-VolumeGain {
     # Funktion zur Anpassung der Lautstaerke mit FFmpeg
     param (
@@ -780,6 +940,10 @@ function Set-VolumeGain {
 
     $videoCopyFlag = $false
     $audioCopyFlag = $false
+    # Explizit initialisieren statt implizit ueber += anzulegen - robuster, falls spaeter mal
+    # Set-StrictMode aktiviert wird, und macht die Absicht im Code klarer.
+    $allErrors = @()
+    $cpuErrors = @()
 
     try {
         Write-Host "Starte FFmpeg zur Lautstaerkeanpassung..." -ForegroundColor Cyan
@@ -811,7 +975,7 @@ function Set-VolumeGain {
             "-i", "`"$($filePath)`""
         )
 
-        # Pruefen ob BitDepth != 8 → immer reencode zu HEVC 8bit
+        # Pruefen ob BitDepth != 8 -> immer Reencode zu HEVC 8bit
         $needsReencodeDueToBitDepth = $false
         if ($bitDepth -ne 8) {
             Write-Host "WARNUNG: BitDepth ist $bitDepth, Reencode zu HEVC 8bit erforderlich" -ForegroundColor Yellow
@@ -823,11 +987,14 @@ function Set-VolumeGain {
         $isAviFile = [System.IO.Path]::GetExtension($filePath).ToLowerInvariant() -eq '.avi'
 
         if ($isAviFile) {
-            Write-Host "AVI-Spezialbehandlung: Visuelle Verbesserung und Transkodierung zu HEVC 1080p..." -ForegroundColor Magenta
-            "`n==== AVI-Spezialbehandlung: Visuelle Verbesserung und Transkodierung zu HEVC 1080p... ====" | Add-Content -LiteralPath $logDatei
+            Write-Host "AVI-Spezialbehandlung: Visuelle Verbesserung und Transkodierung zu HEVC 720p..." -ForegroundColor Magenta
+            "`n==== AVI-Spezialbehandlung: Visuelle Verbesserung und Transkodierung zu HEVC 720p... ====" | Add-Content -LiteralPath $logDatei
 
             # Stellt die Filterkette dynamisch zusammen, basierend darauf, ob das Material interlaced ist.
-            $baseFilter = "hqdn3d=1.0:1.5:3.0:4.5,scale=1920:-2,cas=strength=0.15"
+            # Ziel 1280px statt vorher 1920px: AVI-Quellen sind fast immer SD-Material (VHS-Rips etc.)
+            # ohne echte 1080p-Bilddetails - das Hochskalieren auf 1920px kostete nur Rechenzeit
+            # (Denoise/Schaerfung auf ~60% mehr Pixeln) ohne echten Qualitaetsgewinn.
+            $baseFilter = "hqdn3d=1.0:1.5:3.0:4.5,scale=1280:-2,cas=strength=0.15"
             if ($interlaced) {
                 Write-Host "  -> AVI ist interlaced, wende Deinterlacing an." -ForegroundColor Cyan
                 $videoFilter = "bwdif=0:-1:0," + $baseFilter
@@ -838,8 +1005,18 @@ function Set-VolumeGain {
             }
 
             $baseCrfAvi = 20
-            $cqpValueAvi = [math]::Round($baseCrfAvi * 1.2)
-            $cqValueAvi = [math]::Round($baseCrfAvi * 1.2)
+
+            # Helligkeitskorrektur analog zum Hauptpfad: ueberwiegend dunkles Video bekommt einen
+            # niedrigeren (besseren) CRF, damit Details in Schatten nicht absaufen.
+            if ($brightnessAvg -eq $true) {
+                $adjustedCrfAvi = [math]::Max($baseCrfAvi - 2, 14)
+                Write-Host "  Helligkeitskorrektur: AVI ueberwiegend dunkel → CRF von $baseCrfAvi auf $adjustedCrfAvi gesenkt." -ForegroundColor Yellow
+                "`n==== Helligkeitskorrektur (AVI): CRF von $baseCrfAvi auf $adjustedCrfAvi gesenkt. ====" | Add-Content -LiteralPath $logDatei
+                $baseCrfAvi = $adjustedCrfAvi
+            }
+
+            # Ein gemeinsamer QP-Wert fuer beide Hardware-Encoder (vorher zwei identische Variablen).
+            $qpValueAvi = [math]::Round($baseCrfAvi * 1.2)
 
             # Framerate-Begrenzung auch fuer AVI falls Framerate > 25 FPS
             if ($sourceInfo.FPS -gt 25.1) {
@@ -850,14 +1027,14 @@ function Set-VolumeGain {
                 # AMD HEVC
                 $ffmpegArguments += @(
                     "-c:v", $videoEncoder, "-quality", "quality", "-rc", "cqp",
-                    "-qp_i", $cqpValueAvi, "-qp_p", $cqpValueAvi, "-qp_b", $cqpValueAvi, "-vf", $videoFilter
+                    "-qp_i", $qpValueAvi, "-qp_p", $qpValueAvi, "-qp_b", $qpValueAvi, "-vf", $videoFilter
                 )
             }
             elseif ($videoEncoder -eq "hevc_nvenc") {
-                # NVIDIA HEVC
+                # NVIDIA HEVC - nutzt jetzt die konfigurierbare $Nvidia_quality statt hartcodiertem "p6".
                 $ffmpegArguments += @(
-                    "-c:v", $videoEncoder, "-preset", "p6", "-rc", "vbr",
-                    "-cq", $cqValueAvi, "-b:v", "0", "-vf", $videoFilter
+                    "-c:v", $videoEncoder, "-preset", $Nvidia_quality, "-rc", "vbr",
+                    "-cq", $qpValueAvi, "-b:v", "0", "-vf", $videoFilter
                 )
             }
             else {
@@ -870,7 +1047,14 @@ function Set-VolumeGain {
             }
         }
         # Prueft verschiedene Bedingungen, um zu entscheiden, ob eine Video-Neukodierung erforderlich ist.
-        if ($sourceInfo.Force720p -or $sourceInfo.RecodeRecommended -or $needsReencodeDueToBitDepth -or ($videoCodec -ne $targetVideoCodec) -or ($sourceInfo.FPS -gt 25.1)) {
+        # AVI-Dateien werden hier komplett uebersprungen (weder Transcode- noch Copy-Zweig) - sie wurden
+        # bereits vollstaendig im Block oben behandelt. Ohne diesen Ausschluss wuerden entweder doppelte,
+        # widersprueliche -c:v/-vf-Argumente angehaengt (AVI-Quellcodec ist praktisch nie HEVC, die
+        # Transcode-Bedingung waere sonst immer wahr) oder faelschlich ein zusaetzliches "-c:v copy".
+        if ($isAviFile) {
+            # Nichts zu tun - Video-Encoder-Argumente wurden bereits im AVI-Block oben gesetzt.
+        }
+        elseif ($sourceInfo.Force720p -or $sourceInfo.RecodeRecommended -or $needsReencodeDueToBitDepth -or ($videoCodec -ne $targetVideoCodec) -or ($sourceInfo.FPS -gt 25.1)) {
             Write-Host "Transcode aktiv..." -ForegroundColor Cyan
 
             # Videofilter-Kette initialisieren
@@ -931,31 +1115,41 @@ function Set-VolumeGain {
             }
 
             if ($videoEncoder -eq "hevc_amf") {
+                # EXPERIMENTELL: -preanalysis true aktiviert das komplette AMF-PreAnalysis-Modul
+                # zum ersten Mal wirklich (pa_*-Parameter wirken laut AMD-Doku nur mit preanalysis=true).
+                # Fuer die RX 9070 XT (RDNA4) existiert ein dokumentierter Bugreport zu AMF-Encoder-
+                # Initialisierungsfehlern bei aktivem PreAnalysis. -tiles/-bf/-b_ref_mode bleiben bewusst
+                # draussen (bestaetigte Hang-Ursachen aus frueheren Tests). Bei erneuten Haengern zuerst
+                # -preanalysis, -pa_scene_change_detection_enable und -pa_activity_type wieder entfernen.
                 $ffmpegArguments += @(
                 "-c:v", $videoEncoder,
                 "-pix_fmt", "yuv420p",
                 "-quality", $amd_quality,
                 "-rc", "qvbr",
                 "-qvbr_quality_level", $qvbrLevel,
-                "-tiles", "2x2",
                 "-b:v", "0",
-                "-bf", "2",                # B-Frames
-                #"-b_ref_mode", "1",
-                "-pa_scene_change_detection_enable", "1"
+                # Pre-Analysis & Szene-Optimierung
+                #"-preanalysis", "true",
+                #"-pa_scene_change_detection_enable", "true",
+                #"-pa_activity_type", "1",
+                # Adaptive Bitraten- & Qualitäts-Booster
+                "-vbaq", "true",
+                "-high_motion_quality_boost_enable", "true"
               )
             }
             elseif ($videoEncoder -eq "hevc_nvenc") {
-                # NVIDIA
+                # NVIDIA - vbr+cq statt starrem constqp: adaptive Bitratenverteilung mit Qualitaetsziel,
+                # auf Turing+ (RTX 20xx und neuer) meist effizienter als reines CQP. -multipass fullres
+                # macht einen zweiten, genaueren Analysedurchlauf vor dem eigentlichen Encode.
                 $ffmpegArguments += @(
                     "-c:v", $videoEncoder,
                     "-pix_fmt", "yuv420p",
                     "-preset", $Nvidia_quality,
-                    "-rc", "constqp",
-                    "-cqi", $cqValue,
-                    "-qpp", "$cqValue",
-                    "-qp_cb", "$cqValue",
-                    "-qp_cr", "$cqValue",
-                    "-b:v", "0"
+                    "-tune", "hq",
+                    "-rc", "vbr",
+                    "-cq", $cqValue,
+                    "-b:v", "0",
+                    "-multipass", "fullres"
                 )
             }
             else {
@@ -984,35 +1178,24 @@ function Set-VolumeGain {
             $ffmpegArguments += @("-c:v", "copy")
         }
 
-        # Entscheidet ueber die Audiokodierung basierend auf der Lautstaerkeabweichung und der Kanalanzahl.
-        # Nur wenn eine Lautstaerkeanpassung stattfindet, wird auch das Audio neu kodiert.
+        # Entscheidet ueber die Audiokodierung basierend auf der Lautstaerkeabweichung, der Kanalanzahl und dem Quellcodec.
+        # Der Zielcodec bleibt immer AAC, aber die Parameter werden an den Quellcodec und die Kanaele angepasst, um die Audiospur nicht zu vergroessern.
         if ([math]::Abs($gain) -gt 0.2) {
-            switch ($audioChannels) {
-                { $_ -gt 2 } {
-                    Write-Host "[SURROUND] Audio: Surround - Transcode VBR 3 fuer hohe Surround-Qualitaet" -ForegroundColor Cyan
-                    "`n==== Audio: Surround - Transcode VBR 3 fuer hohe Surround-Qualitaet ====" | Add-Content -LiteralPath $logDatei
-                    $ffmpegArguments += @(
-                        "-c:a", "libfdk_aac",
-                        "-vbr", "3"
-                    )
-                }
-                { $_ -eq 2 } {
-                    Write-Host "[STEREO] Audio: Stereo - Transcode VBR 2 fuer exzellente Stereo-Qualitaet" -ForegroundColor Cyan
-                    "`n==== Audio: Stereo - Transcode VBR 2 fuer exzellente Stereo-Qualitaet ====" | Add-Content -LiteralPath $logDatei
-                    $ffmpegArguments += @(
-                        "-c:a", "libfdk_aac",
-                        "-vbr", "2"
-                    )
-                }
-                default {
-                    Write-Host "[MONO] Audio: Mono - Transcode VBR 1 fuer gute Mono-Qualitaet" -ForegroundColor Cyan
-                    "`n==== Audio: Mono - Transcode VBR 1 fuer gute Mono-Qualitaet ====" | Add-Content -LiteralPath $logDatei
-                    $ffmpegArguments += @(
-                        "-c:a", "libfdk_aac",
-                        "-vbr", "1",
-                        "-ac", "1"
-                    )
-                }
+            $sourceCodec = if ($sourceInfo.AudioCodecFamily) { $sourceInfo.AudioCodecFamily } else { $sourceInfo.AudioCodec }
+            Write-Host "[AUDIO] Quelle: Codec=$($sourceInfo.AudioCodec), Familie=$sourceCodec, Profil=$($sourceInfo.AudioCodecProfile), SampleRate=$($sourceInfo.AudioSampleRate), Layout=$($sourceInfo.AudioLayout)" -ForegroundColor DarkCyan
+            "`n==== Audio-Quelle: Codec=$($sourceInfo.AudioCodec), Familie=$sourceCodec, Profil=$($sourceInfo.AudioCodecProfile), SampleRate=$($sourceInfo.AudioSampleRate), Layout=$($sourceInfo.AudioLayout) ====" | Add-Content -LiteralPath $logDatei
+
+            $aacArgs = Get-AacAudioEncodingArgs -SourceInfo $sourceInfo -AudioChannels $audioChannels
+            Write-Host "[AAC] Zielcodec AAC | Profil=$($aacArgs.Profile) | Bitrate=$($aacArgs.Bitrate) | Kanaele=$audioChannels" -ForegroundColor Cyan
+            "`n==== Audio: Zielcodec AAC | Profil=$($aacArgs.Profile) | Bitrate=$($aacArgs.Bitrate) | Kanaele=$audioChannels ====" | Add-Content -LiteralPath $logDatei
+
+            $ffmpegArguments += @(
+                "-c:a", "aac",
+                "-profile:a", $aacArgs.Profile,
+                "-b:a", $aacArgs.Bitrate
+            )
+            if ($audioChannels -gt 0) {
+                $ffmpegArguments += @("-ac", $audioChannels)
             }
         }
         else {
@@ -1025,7 +1208,9 @@ function Set-VolumeGain {
         }
         # Fuegt die finalen Argumente hinzu: Lautstaerkeanpassung, Untertitel kopieren und Metadaten setzen.
         # Der -af Filter wird immer angewendet, auch bei Gain 0, um die Metadaten konsistent zu halten.
+        $sampleRate = if ($sourceInfo.AudioSampleRate -and $sourceInfo.AudioSampleRate -gt 0) { $sourceInfo.AudioSampleRate } else { 48000 }
         $ffmpegArguments += @(
+            "-ar", $sampleRate,
             "-af", "volume=${gain}dB",
             "-c:s", "copy", # Kopiere alle zugeordneten Untertitel
             "-metadata", "LUFS=$targetLoudness",
@@ -1104,8 +1289,12 @@ function Set-VolumeGain {
 
                 # Hang-Detection: Pruefen ob Timeout ueberschritten
                 if (((Get-Date) - $lastOutputTime).TotalSeconds -gt $hangTimeoutSeconds) {
-                    $process.Kill()
                     Write-Host "`nFEHLER: FFmpeg-Prozess reagiert seit $hangTimeoutSeconds Sekunden nicht mehr. Prozess wurde beendet." -ForegroundColor Red
+                    try {
+                        # taskkill als eigenstaendigen Prozess feuern statt process.Kill() -
+                        # Kill() kann bei einem GPU-Treiber-Deadlock selbst blockierend haengen bleiben.
+                        Start-Process -FilePath "taskkill.exe" -ArgumentList "/F", "/T", "/PID", $process.Id -WindowStyle Hidden -ErrorAction SilentlyContinue
+                    } catch {}
                     throw "FFmpeg-Prozess haengt (Timeout)."
                 }
 
@@ -1163,8 +1352,12 @@ function Set-VolumeGain {
 
             # CPU Video-Optionen: qualityValue hier bereits durch Helligkeitskorrektur angepasst (falls zutreffend)
             $newArgs += @(
-                "-c:v", "libx265",
-                "-pix_fmt", "yuv420p",
+                "-c:v", "libx265"
+            )
+            if ($needsReencodeDueToBitDepth -eq $true) {
+                $newArgs += @("-pix_fmt", "yuv420p")
+            }
+            $newArgs += @(
                 "-preset", $encoderPreset,
                 "-crf", $qualityValue,
                 "-x265-params", "log-level=warning:nr=0:aq-mode=1:frame-threads=12:qcomp=0.7",
@@ -1173,10 +1366,15 @@ function Set-VolumeGain {
 
             # Audio-Optionen beibehalten oder neu setzen
             if ([math]::Abs($gain) -gt 0.2) {
-                $newArgs += @("-c:a", "libfdk_aac")
-                if ($audioChannels -gt 2) { $newArgs += @("-vbr", "3") }
-                elseif ($audioChannels -eq 2) { $newArgs += @("-vbr", "2") }
-                else { $newArgs += @("-vbr", "1", "-ac", "1") }
+                $aacArgs = Get-AacAudioEncodingArgs -SourceInfo $sourceInfo -AudioChannels $audioChannels
+                $newArgs += @(
+                    "-c:a", "aac",
+                    "-profile:a", $aacArgs.Profile,
+                    "-b:a", $aacArgs.Bitrate
+                )
+                if ($audioChannels -gt 0) {
+                    $newArgs += @("-ac", $audioChannels)
+                }
             } else {
                 $newArgs += @("-c:a", "copy")
             }
@@ -1263,8 +1461,10 @@ function Set-VolumeGain {
 
                 # Hang-Detection: Pruefen ob Timeout ueberschritten
                 if (((Get-Date) - $lastOutputTime).TotalSeconds -gt $hangTimeoutSeconds) {
-                    $process.Kill()
                     Write-Host "`nFEHLER: FFmpeg-Prozess reagiert seit $hangTimeoutSeconds Sekunden nicht mehr. Prozess wurde beendet." -ForegroundColor Red
+                    try {
+                        Start-Process -FilePath "taskkill.exe" -ArgumentList "/F", "/T", "/PID", $process.Id -WindowStyle Hidden -ErrorAction SilentlyContinue
+                    } catch {}
                     throw "FFmpeg-Prozess haengt (Timeout)."
                 }
 
@@ -1319,16 +1519,26 @@ function Get-VmafScore {
         [hashtable]$sourceInfo
     )
 
+    # Eindeutiger Temp-Pfad fuer das VMAF-JSON-Log (siehe unten: JSON-Log ist zuverlaessiger als
+    # stderr-Textparsing, besonders auf Windows). Guid vermeidet Kollisionen bei evtl. parallelen/
+    # wiederholten Laeufen. Für den libvmaf-Filter-String muessen Backslashes zu Forward-Slashes
+    # und der Laufwerksbuchstaben-Doppelpunkt zu "\:" escaped werden (Windows-spezifische Eigenart
+    # der libvmaf-Optionssyntax, sonst wird der Pfad als zusaetzliche Option fehlinterpretiert).
+    $vmafJsonLogPath = Join-Path ([System.IO.Path]::GetTempPath()) "vmaf_$([Guid]::NewGuid().ToString('N')).json"
+    $vmafJsonLogPathEscaped = ($vmafJsonLogPath -replace '\\', '/') -replace ':', '\:'
+    $vmafLogOptions = ":log_path=${vmafJsonLogPathEscaped}:log_fmt=json"
+
     # Bei Resize/Force720p hat die Ausgabe eine andere Aufloesung als die Quelle.
     # libvmaf braucht identische Aufloesung -> Ausgabe auf Quellaufloesung hochskalieren
-    # (Netflix-VMAF-Empfehlung: die kleinere/distorted Seite auf die Referenz skalieren).
-    $vmafFilter = "[0:v]setpts=PTS-STARTPTS[ref];[1:v]setpts=PTS-STARTPTS[dist];[ref][dist]libvmaf=n_subsample=5:n_threads=$([Environment]::ProcessorCount)"
+    # (Netflix-VMAF-Empfehlung, verifiziert: die kleinere/distorted Seite wird auf die Referenz
+    # hochskaliert, NICHT umgekehrt - das VMAF-Modell wurde genau so trainiert).
+    $vmafFilter = "[0:v]trim=start=${StartSec}:duration=${DurationSec},setpts=PTS-STARTPTS[ref];[1:v]trim=start=${StartSec}:duration=${DurationSec},setpts=PTS-STARTPTS[dist];[dist][ref]libvmaf=model=version=vmaf_v0.6.1:n_subsample=5:n_threads=$([Environment]::ProcessorCount)${vmafLogOptions}"
     try {
         if (($sourceInfo.resize -eq $true -or $sourceInfo.Force720p -eq $true) -and $sourceInfo.Resolution -match "^(\d+)x(\d+)$") {
             $srcWidth  = $matches[1]
             $srcHeight = $matches[2]
             Write-Host "  VMAF: Resize/Force720p erkannt — skaliere Ausgabe auf Quellaufloesung (${srcWidth}x${srcHeight}) fuer Vergleich." -ForegroundColor Cyan
-            $vmafFilter = "[0:v]setpts=PTS-STARTPTS[ref];[1:v]scale=${srcWidth}:${srcHeight}:flags=bicubic,setpts=PTS-STARTPTS[dist];[ref][dist]libvmaf=n_subsample=5:n_threads=$([Environment]::ProcessorCount)"
+            $vmafFilter = "[0:v]trim=start=${StartSec}:duration=${DurationSec},setpts=PTS-STARTPTS[ref];[1:v]trim=start=${StartSec}:duration=${DurationSec},scale=${srcWidth}:${srcHeight}:flags=bicubic,setpts=PTS-STARTPTS[dist];[dist][ref]libvmaf=model=version=vmaf_v0.6.1:n_subsample=5:n_threads=$([Environment]::ProcessorCount)${vmafLogOptions}"
         }
         elseif ($sourceInfo.resize -eq $true -or $sourceInfo.Force720p -eq $true) {
             Write-Host "  VMAF: Resize/Force720p erkannt, Quellaufloesung nicht lesbar — VMAF wird übersprungen." -ForegroundColor Yellow
@@ -1347,7 +1557,7 @@ function Get-VmafScore {
         # -t begrenzt die Analysedauer auf $DurationSec Sekunden ab dem Seekpunkt.
         # libvmaf n_subsample=5: jeden 5. Frame auswerten, ~80% schneller als vollstaendige Analyse.
         # KEIN hwaccel: libvmaf ist ein Software-Filter.
-        $startInfo.Arguments = "-ss $StartSec -i `"$SourceFile`" -ss $StartSec -i `"$OutputFile`" -t $DurationSec -lavfi `"$vmafFilter`" -loglevel info -stats -f null NUL"
+        $startInfo.Arguments = "-i `"$SourceFile`" -i `"$OutputFile`" -an -lavfi `"$vmafFilter`" -loglevel info -stats -f null NUL"
         $startInfo.RedirectStandardError = $true
         $startInfo.UseShellExecute       = $false
         $startInfo.CreateNoWindow        = $true
@@ -1379,8 +1589,11 @@ function Get-VmafScore {
             }
 
             if (((Get-Date) - $vmafLastOutputTime).TotalSeconds -gt $vmafHangTimeoutSec) {
-                $proc.Kill()
                 Write-Host "`n  VMAF: FFmpeg reagiert seit $vmafHangTimeoutSec Sekunden nicht mehr, Prozess beendet." -ForegroundColor Red
+                try {
+                    Start-Process -FilePath "taskkill.exe" -ArgumentList "/F", "/T", "/PID", $proc.Id -WindowStyle Hidden -ErrorAction SilentlyContinue
+                } catch {}
+                Remove-Item -LiteralPath $vmafJsonLogPath -Force -ErrorAction SilentlyContinue
                 return $null
             }
 
@@ -1395,17 +1608,45 @@ function Get-VmafScore {
 
         if ($proc.ExitCode -ne 0) {
             Write-Host "  VMAF: FFmpeg fehlgeschlagen (Exit-Code $($proc.ExitCode))." -ForegroundColor Yellow
+            Remove-Item -LiteralPath $vmafJsonLogPath -Force -ErrorAction SilentlyContinue
             return $null
         }
 
-        # FFmpeg schreibt den VMAF-Score in stderr: "VMAF score: 96.123456"
-        $match = [regex]::Match($output, "VMAF score:\s*([\d\.]+)")
-        if (-not $match.Success) {
-            Write-Host "  VMAF: Kein Score in FFmpeg-Ausgabe gefunden." -ForegroundColor Yellow
-            return $null
+        # Score primaer aus der JSON-Log-Datei lesen (zuverlaessiger als stderr-Textparsing,
+        # besonders auf Windows - siehe Kommentar bei $vmafJsonLogPath oben).
+        $score = $null
+        if (Test-Path -LiteralPath $vmafJsonLogPath) {
+            try {
+                $vmafJsonRaw = Get-Content -LiteralPath $vmafJsonLogPath -Raw -ErrorAction Stop
+                $vmafData = $vmafJsonRaw | ConvertFrom-Json -ErrorAction Stop
+                if ($vmafData.pooled_metrics.vmaf.mean) {
+                    $score = [math]::Round([double]$vmafData.pooled_metrics.vmaf.mean, 2)
+                }
+            }
+            catch {
+                # JSON nicht lesbar/parsebar - Fallback auf stderr-Regex unten greift automatisch.
+            }
+            finally {
+                Remove-Item -LiteralPath $vmafJsonLogPath -Force -ErrorAction SilentlyContinue
+            }
         }
 
-        $score = [math]::Round([double]$match.Groups[1].Value, 2)
+        if ($null -eq $score) {
+            # Fallback: FFmpeg kann den VMAF-Score auch in stderr ausgeben, z. B. "VMAF score: 96.123456".
+            # Der Parser ist bewusst robust und akzeptiert auch leicht abweichende Schreibweisen.
+            $match = [regex]::Match($output, '(?im)\bVMAF\b[^0-9\r\n]{0,20}([0-9]+(?:\.[0-9]+)?)')
+            if (-not $match.Success) {
+                $match = [regex]::Match($output, '(?im)\bscore\b[^0-9\r\n]{0,20}([0-9]+(?:\.[0-9]+)?)')
+            }
+
+            if (-not $match.Success) {
+                $snippet = if ($output.Length -gt 400) { $output.Substring($output.Length - 400) } else { $output }
+                Write-Host "  VMAF: Kein Score gefunden (weder JSON-Log noch FFmpeg-Ausgabe). Rohausgabe: $snippet" -ForegroundColor Yellow
+                return $null
+            }
+
+            $score = [math]::Round([double]$match.Groups[1].Value, 2)
+        }
 
         if ($score -ge 93) {
             Write-Host ("  VMAF-Score: {0:N2}  → Transparent (nicht vom Original unterscheidbar)" -f $score) -ForegroundColor Green
@@ -1559,27 +1800,53 @@ function Invoke-IntegrityCheck {
     $totalFrames = [math]::Round($SourceInfo.Duration1 * $SourceInfo.FPS)
     $outputBuilder = New-Object System.Text.StringBuilder
 
-    while (-not $process.HasExited) {
-        $line = $process.StandardError.ReadLine()
-        if ($null -ne $line) {
-            [void]$outputBuilder.AppendLine($line)
-            if ($line -like "frame=*") {
-                $progressMatch = [regex]::Match($line, "frame=\s*(\d+)\s+fps=\s*([\d\.]+)")
-                if ($progressMatch.Success) {
-                    $processedFrames = [int64]$progressMatch.Groups[1].Value
-                    $currentFps = [double]$progressMatch.Groups[2].Value.Replace('.', ',')
+    # Hang-Detection analog zu den anderen FFmpeg-Aufrufen im Skript (Haupt-Encode, VMAF, etc.) -
+    # vorher wurde hier synchron und ungeschuetzt gelesen, ohne jedes Zeitlimit.
+    $lastOutputTime = Get-Date
+    $hangTimeoutSeconds = 300
+    $readTask = $process.StandardError.ReadLineAsync()
 
-                    if ($currentFps -gt 0 -and $totalFrames -gt 0 -and $processedFrames -le $totalFrames) {
-                        $percentComplete = ($processedFrames / $totalFrames) * 100
-                        $progressText = "Pruefung ($CheckType): {0:N2}%" -f $percentComplete
-                        Write-Host "`r$progressText" -NoNewline -ForegroundColor Gray
+    while (-not $process.HasExited) {
+        if ($readTask.IsCompleted) {
+            $line = $readTask.Result
+            if ($null -ne $line) {
+                $lastOutputTime = Get-Date
+                [void]$outputBuilder.AppendLine($line)
+                if ($line -like "frame=*") {
+                    $progressMatch = [regex]::Match($line, "frame=\s*(\d+)\s+fps=\s*([\d\.]+)")
+                    if ($progressMatch.Success) {
+                        $processedFrames = [int64]$progressMatch.Groups[1].Value
+                        $currentFps = [double]$progressMatch.Groups[2].Value.Replace('.', ',')
+
+                        if ($currentFps -gt 0 -and $totalFrames -gt 0 -and $processedFrames -le $totalFrames) {
+                            $percentComplete = ($processedFrames / $totalFrames) * 100
+                            $progressText = "Pruefung ($CheckType): {0:N2}%" -f $percentComplete
+                            Write-Host "`r$progressText" -NoNewline -ForegroundColor Gray
+                        }
                     }
                 }
+                $readTask = $process.StandardError.ReadLineAsync()
             }
         }
+
+        if (((Get-Date) - $lastOutputTime).TotalSeconds -gt $hangTimeoutSeconds) {
+            Write-Host "`nFEHLER: FFmpeg-Integritaetspruefung ($CheckType) reagiert seit $hangTimeoutSeconds Sekunden nicht mehr." -ForegroundColor Red
+            try {
+                Start-Process -FilePath "taskkill.exe" -ArgumentList "/F", "/T", "/PID", $process.Id -WindowStyle Hidden -ErrorAction SilentlyContinue
+            } catch {}
+            return [PSCustomObject]@{
+                ExitCode    = -1
+                ErrorOutput = "FFmpeg-Integritaetspruefung haengt (Timeout nach $hangTimeoutSeconds Sekunden)."
+            }
+        }
+
+        Start-Sleep -Milliseconds 50
     }
     Write-Host "" # Zeilenumbruch nach der Fortschrittsanzeige
     $process.WaitForExit()
+
+    $remaining = $process.StandardError.ReadToEnd()
+    if ($remaining) { [void]$outputBuilder.Append($remaining) }
 
     return [PSCustomObject]@{
         ExitCode    = $process.ExitCode
@@ -1694,7 +1961,34 @@ function Remove-Files {
                 # Pruefen, ob die Quelldatei eine AVI ist. In diesem Fall soll die fehlerhafte Ausgabedatei nicht geloescht werden.
                 $isAviFile = [System.IO.Path]::GetExtension($sourceFile).ToLowerInvariant() -eq '.avi'
                 if (-not $isAviFile) {
-                    Remove-Item -Path $outputFile -Force
+                    if (Test-Path -LiteralPath $outputFile) {
+                        $deleteAttempts = 0
+                        $deleteSucceeded = $false
+
+                        while (-not $deleteSucceeded -and $deleteAttempts -lt 3) {
+                            $deleteAttempts++
+                            try {
+                                Remove-Item -LiteralPath $outputFile -Force -ErrorAction Stop
+                                $deleteSucceeded = -not (Test-Path -LiteralPath $outputFile)
+                            }
+                            catch {
+                                if ($deleteAttempts -lt 3) {
+                                    Start-Sleep -Milliseconds 1000
+                                }
+                                else {
+                                    throw
+                                }
+                            }
+                        }
+
+                        if ($deleteSucceeded) {
+                            Write-Host "  Gelöscht: $outputFile" -ForegroundColor Green
+                            "`n==== Gelöscht: $outputFile ====" | Add-Content -LiteralPath $logDatei
+                        }
+                    }
+                    else {
+                        Write-Host "  INFO: Ausgabedatei war bereits nicht vorhanden: $outputFile" -ForegroundColor DarkGray
+                    }
                 }
                 else {
                     Write-Host "  INFO: Die Quelldatei ist eine AVI. Die fehlerhafte Ausgabedatei '$outputFile' wird zur Analyse beibehalten." -ForegroundColor Cyan
@@ -1714,6 +2008,67 @@ function Remove-Files {
     catch {
         Write-Host "  FEHLER bei Umbenennung/Loeschen: $_" -ForegroundColor Red
         "`n==== FEHLER bei Umbenennung/Loeschen: $_ ====" | Add-Content -LiteralPath $logDatei
+    }
+}
+function Write-CalibrationData {
+    # Haengt Groesse/Aufloesung/VMAF-Daten einer verarbeiteten Datei als Eintrag an eine einzige,
+    # kumulative JSON-Datei an. Wird nur ausgefuehrt, wenn $enableCalibrationLogging aktiv ist.
+    # Fehler hier duerfen die eigentliche Verarbeitung niemals stoppen, daher komplett in try/catch.
+    param (
+        [string]$FilePath,
+        [bool]$IsSeries,
+        [string]$Resolution,
+        [double]$DurationSeconds,
+        [double]$SourceSizeMB,
+        [double]$OutputSizeMB,
+        [object]$VmafScore,
+        [string]$Aktion
+    )
+    if (-not $enableCalibrationLogging) { return }
+
+    try {
+        # Bestehende Eintraege laden (falls Datei schon existiert).
+        $allData = @()
+        if (Test-Path -LiteralPath $calibrationLogFile) {
+            $existingJson = Get-Content -LiteralPath $calibrationLogFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+            if ($existingJson) {
+                # ConvertFrom-Json gibt bei genau einem Eintrag ein einzelnes Objekt zurueck statt eines
+                # Arrays - @() normalisiert das zuverlaessig auf ein Array.
+                $allData = @($existingJson | ConvertFrom-Json)
+            }
+        }
+
+        # Aufloesung in Megapixel umrechnen, um MB/s/MP direkt mitzuliefern (spart manuelles Nachrechnen).
+        $megapixels = 2.07
+        if ($Resolution -match "^(\d+)x(\d+)$") {
+            $megapixels = ([double]$matches[1] * [double]$matches[2]) / 1000000
+        }
+        $mbProSekunde = if ($DurationSeconds -gt 0) { [math]::Round($OutputSizeMB / $DurationSeconds, 4) } else { 0 }
+        $mbProSekundeProMP = if ($megapixels -gt 0) { [math]::Round($mbProSekunde / $megapixels, 4) } else { 0 }
+
+        $neuerEintrag = [PSCustomObject]@{
+            Datei             = [System.IO.Path]::GetFileName($FilePath)
+            Zeitstempel       = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+            IstSerie          = $IsSeries
+            Aufloesung        = $Resolution
+            Megapixel         = [math]::Round($megapixels, 3)
+            DauerSekunden     = [math]::Round($DurationSeconds, 1)
+            QuellGroesseMB    = [math]::Round($SourceSizeMB, 2)
+            ZielGroesseMB     = [math]::Round($OutputSizeMB, 2)
+            VMAF              = $VmafScore
+            Aktion            = $Aktion
+            MBProSekunde      = $mbProSekunde
+            MBProSekundeProMP = $mbProSekundeProMP
+        }
+
+        # Vorhandenen Eintrag fuer dieselbe Datei entfernen (bei erneuter Verarbeitung ersetzen statt duplizieren).
+        $allData = @($allData | Where-Object { $_.Datei -ne $neuerEintrag.Datei })
+        $allData += $neuerEintrag
+
+        $allData | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $calibrationLogFile -Encoding UTF8
+    }
+    catch {
+        Write-Warning "Kalibrierungsdaten konnten nicht gespeichert werden: $_"
     }
 }
 function Get-OptimalHwaccel {
@@ -1914,6 +2269,10 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
 
         # Initialisiere Encoding-Flag fuer diese Datei (nicht vom vorherigen Durchlauf uebernehmen)
         $videocopy = $false
+        # $encodeResult ebenfalls zuruecksetzen - sonst wuerde bei Dateien mit Gain <= 0.2 dB
+        # (kein Set-VolumeGain-Aufruf) das Ergebnis der VORHERIGEN Datei fuer $audiocopyflag
+        # herangezogen werden, was zu einer falschen "Aktion" in Statistik/CalibrationData fuehrt.
+        $encodeResult = $null
 
         $logBaseName = [System.IO.Path]::GetFileName($file)
         $logDatei = Join-Path -Path $destFolder -ChildPath "$($logBaseName).log"
@@ -2080,6 +2439,9 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
                         Ersparnis_Prz = $script:lastFileStats.Ersparnis_Prz
                         VMAF          = $finalVmaf
                     }
+                    Write-CalibrationData -FilePath $file -IsSeries $sourceInfo.IsSeries -Resolution $sourceInfo.Resolution `
+                        -DurationSeconds $sourceInfo.Duration1 -SourceSizeMB $script:lastFileStats.Quelle_MB `
+                        -OutputSizeMB $script:lastFileStats.Ziel_MB -VmafScore $finalVmaf -Aktion $aktion
                     $script:lastFileStats = $null
                 }
 

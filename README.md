@@ -1,150 +1,223 @@
+# 🚀 Powershell Video-Transcoder & Serien-Umbenenner
+
 [![Codacy Badge](https://app.codacy.com/project/badge/Grade/0ec11745ed0c4e268fa6fd2316f53b57)](https://app.codacy.com/gh/Maximus1/Powershell-Video-Transcoder/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
-# 🚀 Der ultimative PowerShell Video-Transcoder & Normalizer – Mit Helligkeitsanalyse und CRF-Optimierung! 🚀
+> Vollautomatische Video-Transkodierung mit KI-inspirierter Qualitätsanalyse, adaptiver Helligkeitsmessung, VMAF-Qualitätskontrolle und einem intelligenten Serien-Umbenenner.
 
-**Skript:** [Auto Video Transcode noch schneller mit helligkeitsmessung.ps1](./Auto%20Video%20Transcode%20noch%20schneller%20mit%20helligkeitsmessung.ps1)
+**Haben Sie es satt, Ihre Videos manuell zu konvertieren, die Lautstärke anzupassen und Serien-Dateinamen zu korrigieren?**
 
-Haben Sie es satt, Ihre Videos manuell zu konvertieren und die Lautstärke anzupassen? Verabschieden Sie sich von inkonsistenten Dateigrößen und schwankenden Audiopegeln! Dieses Skript ist Ihr persönlicher, vollautomatischer Medien-Butler, der Ihre gesamte Videosammlung in eine moderne, optimierte und qualitativ hochwertige Bibliothek verwandelt.
+Dieses Repository enthält zwei leistungsstarke PowerShell-Werkzeuge:
 
-**Starten Sie das Skript, wählen Sie einen Ordner aus, und lehnen Sie sich zurück. Den Rest erledigt die Magie der Automatisierung!**
+| Tool | Beschreibung |
+|---|---|
+| 🎬 **Auto Video Transcoder** | Wandelt Ihre komplette Videosammlung automatisch in hochoptimiertes HEVC (H.265) um – mit Helligkeitsanalyse, LUFS-Audionormalisierung, VMAF-Qualitätssicherung und GPU-Beschleunigung. |
+| 📺 **Serien-Umbenenner** | Benennt Serien-Dateien automatisch anhand der Episodenführer von fernsehserien.de um – inklusive grafischer Auswahloberfläche und Scene-Tag-Bereinigung. |
 
----
-
-## ✨ Was ist neu? 🆕
-
-### ⭐ Adaptive Helligkeitsanalyse mit automatischer CRF-Anpassung
-Das Skript analysiert jedes Video vor dem Encoding auf seine durchschnittliche Helligkeit mittels **9 repräsentativer Segmente** (Luma-YAVG-Werte von 0-255) über ein 15-sekündiges Analysefenster pro Segment:
-
-- **Vorspann-Schutz:** Die ersten 90 Sekunden werden übersprungen, um Studiologos und Intros zu ignorieren.
-- **Abspann-Ausschluss:** Die letzten ~18% der Dauer werden ignoriert (Analyse endet bei 82% der Gesamtlaufzeit), um einen schwarzen Abspann nicht fälschlicherweise als dunkles Video zu interpretieren.
-- **Präziser Doppel-Seek:** Nutzt einen kombinierten Fast-Seek und Accurate-Seek (`-ss [Zeit-2] -i ... -ss 2`), um Keyframe-Versatze ohne nennenswerten Dekodier-Overhead präzise auszugleichen.
-- **Robuste Mehrheitsentscheidung:** Nur wenn eine klare Mehrheit der Segmente (**mindestens 6 von 9**) dunkel ist (unter 60 YAVG), gilt das Video als überwiegend dunkel.
-- **Automatische CRF-Anpassung:** Bei überwiegend dunklem SDR-Material wird der CRF automatisch um 2 Punkte gesenkt, damit der Encoder mehr Bits für Schattenbereiche und Rauschen aufwendet (Untergrenze von CRF 14 ist fest codiert).
-- **HDR-Schutz:** Bei HDR-Material wird die Helligkeitsanalyse automatisch übersprungen – SDR-Luma-Messungen wären bei HDR-Content irreführend!
-
-Diese Innovation sorgt dafür, dass dunkle Filme (Noir, Sci-Fi-Nächte, Horror) ihre Schwarzwerte und Bildatmosphäre optimal beibehalten.
+**Starten Sie das Skript, wählen Sie einen Ordner, und lehnen Sie sich zurück – den Rest erledigt die Automatisierung.**
 
 ---
 
-## ✨ Hauptfunktionen – Was dieses Skript so besonders macht
+## ✨ NEU: Die Highlights der aktuellen Version
 
-### 🚀 Blitzschnelle parallele Verarbeitung der Tag-Prüfung
-- **Multi-Core-Optimierung:** Das Skript nutzt **parallele Verarbeitung mit bis zu 8 Threads gleichzeitig** (`ForEach-Object -Parallel`), um den Normalisierungs-Status aller Dateien im Ordner vorab zu ermitteln.
-- **Intelligente Vorab-Prüfung:** Bereits normalisierte MKV-Dateien (erkannt am Metadaten-Tag `NORMALIZED=true` via `mkvextract`) werden sofort identifiziert und übersprungen. Das spart massiv Zeit!
+### 🎯 Adaptive Helligkeitsmessung mit automatischer CRF-Optimierung
+Das Herzstück der neuesten Version ist die intelligente Helligkeitsanalyse (nur SDR, per FFmpeg `signalstats`-Filter – keine externen Tools nötig):
 
-### 🎮 GPU-Beschleunigung für rasante Konvertierung
-- **Automatische Hardware-Erkennung:** Das Skript analysiert Ihre Grafikkarten via WMI/CIM und gleicht diese mit den verfügbaren FFmpeg-Encodern ab:
-  - **NVIDIA:** `hevc_nvenc` (mit dem zugewiesenen Qualitäts-Preset `hq`) und hardwarebeschleunigtem Decoding via `d3d11va`.
-  - **AMD:** `hevc_amf` (mit dem zugewiesenen Qualitäts-Preset `quality`) und hardwarebeschleunigtem Decoding via `d3d11va`.
-  - **Fallback:** Automatische Umschaltung auf den CPU-Encoder `libx265`, falls keine kompatible GPU oder kein passender FFmpeg-Support gefunden wird.
-- **AV1-Sicherheitsnetz:** Bei AV1-Quellmaterial wird die Hardware-Dekodierung (`-hwaccel d3d11va`) automatisch deaktiviert, da sie häufig zu Instabilitäten führt.
+- **9 repräsentative Segmente** à 15 Sekunden werden gleichmäßig über die Filmlänge verteilt (YAVG-Werte, Skala 0–255).
+- **Vorspann-Schutz:** Die ersten 90 Sekunden werden übersprungen – Studiologos und Intros verfälschen das Ergebnis nicht.
+- **Abspann-Ausschluss:** Die Analyse endet bei 82 % der Gesamtlaufzeit, damit ein schwarzer Abspann nicht fälschlich als dunkles Video gewertet wird.
+- **Präziser Doppel-Seek:** Kombinierter Fast-Seek + Accurate-Seek (`-ss [Zeit-2] -i ... -ss 2`) gleicht Keyframe-Versätze aus – ohne Dekodier-Overhead.
+- **Klare Mehrheitsentscheidung:** Nur wenn **mindestens 6 von 9 Segmenten** dunkel sind (< 60 YAVG), gilt das Video als überwiegend dunkel.
+- **Automatische CRF-Anpassung:** Bei dunklen SDR-Videos wird der CRF um **2 Punkte gesenkt** (Untergrenze CRF 14), damit der Encoder mehr Bits für Schattenbereiche und Rauschen aufwendet.
+- **HDR-Schutz:** Bei HDR-Material wird die Helligkeitsanalyse automatisch übersprungen (SDR-Luma wäre bei HDR irreführend).
 
-### 🧠 Intelligente & adaptive Transkodierung
-- **Automatische Codec-Modernisierung:** Konvertiert veraltete Formate (wie XviD, DivX, H.264) automatisch in das hocheffiziente **HEVC (H.265)** Format.
-- **Serien-Erkennung & Parameter-Wechsel:** Erkennt Serien automatisch anhand des `SxxExx`-Musters im Dateinamen:
-  - **Filme:** Erhalten den Standard-Zielwert `$crfTargetm = 18` (bzw. CQ/CQP-Äquivalente bei GPU-Nutzung).
-  - **Serien:** Erhalten den Standard-Zielwert `$crfTargets = 20`. Falls eine Serie eine Auflösung von über 720p besitzt, wird automatisch eine Skalierung auf 720p (`scale=1280:-2`) erzwungen, um Speicherplatz zu sparen.
-- **Effizienz-Analyse (Größen-Check):** Vergleicht die tatsächliche Dateigröße mit einer mathematisch erwarteten Zielgröße (basierend auf konfigurierten Bitraten-Profilen). Ein Recode wird nur durchgeführt, wenn die Datei signifikant zu groß für ihre Laufzeit ist (> 50% über dem Erwartungswert) oder der Codec nicht übereinstimmt.
-- **Schutz vor Aufblähen:** Sollte die neu kodierte Ausgabedatei trotz Video-Rekodierung um mehr als 3 MB größer werden als das Original, bricht die Validierung ab und die Datei wird verworfen.
+### 🛠️ Kalibrierungs-Logging (CalibrationData.json)
+Neu hinzugekommen ist ein optionales **Kalibrierungs-Logging** (`$enableCalibrationLogging`):
 
-### 🎯 VMAF-Qualitätskontrolle mit automatischem Re-Recode
-- **Professionelle Qualitätsmessung:** Misst den **VMAF-Score** (Video Multi-Method Assessment Fusion) im Direktvergleich zwischen Quelle und Ausgabe mittels `n_subsample=5` (jeder 5. Frame wird gewertet – spart ~80% Analysezeit).
-- **Automatische CRF-Kompensation:** Fällt der VMAF-Score unter die konfigurierte Mindestgrenze abzüglich der Toleranz (`$vmafMinScore - $vmafTolerance`), startet das Skript automatisch einen neuen Encoding-Versuch.
-- **Iterative Qualitätssteigerung:** Bei jedem der maximal `$vmafMaxRetries` Versuche wird der CRF-Wert um weitere 2 Punkte gesenkt (bis maximal CRF 14), um die Bitrate gezielt anzuheben.
-- **Dateisicherungs-Netz:** Vor jedem erneuten Recode wird die bisherige Ausgabedatei als `.backup` gesichert. Schlägt der neue Versuch fehl oder reißt die Dateigrößengrenze, wird das Backup vollautomatisch wiederhergestellt.
+- Speichert nach jedem erfolgreichen Transcode Größe, Auflösung und VMAF-Score in einer kumulativ wachsenden **JSON-Datei**.
+- Berechnet automatisch die Werte **MB/s** und **MB/s pro Megapixel** – ideal, um die Qualitätsprofile der Größenanalyse anhand realer eigener Werte nachzukalibrieren.
+- Vorhandene Einträge für dieselbe Datei werden ersetzt statt dupliziert.
 
-### 🎥 Proaktive Interlace & FPS-Stabilisierung
-- **Dynamische Interlace-Erkennung:** Analysiert die ersten 1500 Frames via `idet`-Filter. Überwiegen TFF/BFF-Frames gegenüber progressiven Frames, wird echtes Deinterlacing mittels `bwdif=0:-1:0` hinzugeschaltet.
-- **FPS-Capping (PAL-Kompatibilität):** Videos mit einer Framerate von mehr als 25.1 FPS werden beim Encoding rigoros auf **25 FPS** begrenzt (`-r 25`), um Abspielprobleme auf klassischen Mediaplayern zu verhindern.
-- **Bit-Depth-Sanierung:** Videos mit einer Farbtiefe ungleich 8-Bit werden automatisch zu standardisiertem HEVC 8-Bit re-kodiert.
+### ⚡ Dynamische Hardware-Beschleunigungs-Auswahl (Get-OptimalHwaccel)
+Statt fest verdrahtet nur `d3d11va` zu nutzen, fragt das Skript jetzt **alle von FFmpeg unterstützten HW-Beschleuniger** dynamisch ab (`ffmpeg -hwaccels`) und wählt herstellerspezifisch die beste Methode:
 
-### 🎬 Restaurierung für alte Schätze (AVI-VIP-Behandlung)
-Alte `.avi`-Dateien durchlaufen automatisch eine fest definierte, hochwertige Restaurierungs-Filterkette auf Basis von CPU/GPU-spezifischen Profilen (Standard-Basiswert: CRF 20):
-1. **Deinterlacing** (`bwdif=0:-1:0`) – falls die `idet`-Analyse Interlaced-Material meldet.
-2. **Rauschunterdrückung** (`hqdn3d=1.0:1.5:3.0:4.5`) zur Bereinigung des analogen Rauschens.
-3. **Upscaling auf 1080p** via intelligentem `scale=1920:-2`.
-4. **Nachschärfen** mittels Contrast Adaptive Sharpening (`cas=strength=0.15`) für klare Kantenzeichnungen.
+| GPU | Prioritätenliste |
+|---|---|
+| NVIDIA (`hevc_nvenc`) | `cuda` → `nvdec` → `d3d12va` → `d3d11va` → `vulkan` → `dxva2` |
+| AMD (`hevc_amf`) | `d3d11va` → `d3d12va` → `vulkan` → `dxva2` → `opencl` |
+| Intel (`hevc_qsv`) | `qsv` → `d3d12va` → `d3d11va` → `dxva2` → `vaapi` |
 
-### 🔊 Professionelle Audionormalisierung (EBU R128)
-- **Präzise LUFS-Messung:** Analysiert die erste Audiospur via FFmpeg-Filter `ebur128`.
-- **Exakte Pegelanpassung:** Berechnet die Abweichung zum konfigurierten Zielwert `$targetLoudness = -18` LUFS. Liegt die Abweichung über 0.2 dB, wird das Audio angepasst.
-- **High-End Audio-Encoding:** Nutzt den hochwertigen `libfdk_aac`-Codec im Variable-Bitrate-Verfahren (VBR):
-  - **Surround-Audio (> 2 Kanäle):** `VBR 3` für exzellente Raumklang-Kompression.
-  - **Stereo-Audio (= 2 Kanäle):** `VBR 2` für kristallklaren Stereoklang.
-  - **Mono-Audio:** `VBR 1` unter expliziter Downmix-Erzwingung auf einen Kanal (`-ac 1`).
-- **Bitstream-Kopie:** Liegt der Pegel bereits im Toleranzbereich (±0.2 dB), wird die Audiospur verlustfrei kopiert (`-c:a copy`).
+### 🔊 Intelligentes AAC-Bitrate-Management (Get-AacAudioEncodingArgs)
+Neue Funktion für die Audio-Encoding-Parameter:
 
-### 🛑 Hang-Detection & Asynchrone Prozessüberwachung
-Das Skript duldet keine blockierten Prozesse. Über die Hintergrund-Überwachung `Watch-FFmpegProcess` werden alle kritischen Instanzen im **10-Sekunden-Takt** validiert:
+- Wählt das Profil **`aac_low`** (konservativster, kompatibelster AAC-Profileintrag).
+- **Dynamische Bitratenberechnung:** Basis 96 k (Mono), 128 k (Stereo), 160 k+ (Surround) – bei bekannter Quellbitrate wird der Wert adaptiv abgeleitet (75 % bei ≤ 2 Kanälen, 50 % bei > 2 Kanälen, begrenzt auf sinnvolle Bereiche).
+- Verhindert das unnötige Aufblähen der Audiospur bei Surround-Material.
 
-| Modus | Abgedeckte Funktionen | Überwachungskriterien | Timeout | Aktion bei Fehler |
-|---|---|---|---|---|
-| **1B** | `Get-FFmpegOutput`<br>`Get-InterlaceInfo`<br>`Get-VideoBrightnessInfo`<br>`Get-LoudnessInfo` | CPU-Aktivität (Delta < 0.5s Stagnation) | **120 Sek.** | Beendet exakt die betroffene Prozess-PID via `.Kill()` |
-| **2 / 3** | `Set-VolumeGain` (CPU-Fallback)<br>`Get-VmafScore` | Globaler Frame-Fortschritt (`$global:CurrentFFmpegFrame`) & CPU-Aktivität | **120 Sek.** | Beendet exakt die betroffene Prozess-PID via `.Kill()` |
+### 🚀 VMAF-Qualitätskontrolle v2
+- **JSON-Log-Auswertung:** Der VMAF-Score wird primär aus einer temporären JSON-Log-Datei gelesen – deutlich zuverlässiger als stderr-Textparsing (Windows-spezifische Lösung).
+- **Toleranzzone:** Scores zwischen `$vmafMinScore` und `$vmafMinScore - $vmafTolerance` werden still akzeptiert – nur eine deutliche Unterschreitung löst einen Retry aus.
+- **Backup/Restore-Sicherheitsnetz:** Vor jedem Retry wird die aktuelle Ausgabedatei als `.backup` gesichert. Schlägt der neue Encode die Größenvalidierung, wird das Backup automatisch wiederhergestellt.
+- **Iteratives CRF-Stepping:** Jeder Retry senkt den CRF um 2 (bis auf Untergrenze 14).
 
-*Hinweis zur Haupt-GPU-Konvertierung:* Die Haupt-Konvertierung in `Set-VolumeGain` besitzt eine zusätzliche, integrierte asynchrone Schleife (`ReadLineAsync`) mit einem dedizierten **300-Sekunden-Timeout** (5 Minuten), die bei vollständigem Stillstand der FFmpeg-Standardfehlerausgabe greift und den Prozess terminiert.
+### 🔄 AVI-Restaurierung optimiert (720p)
+Die AVI-Spezialbehandlung wurde verbessert:
 
-### 📊 Detaillierte farbkodierte Statistik
-Nach Abschluss aller Aufgaben wird eine strukturierte Tabelle mit dynamisch berechneten Spaltenbreiten und einer finalen Summenzeile ausgegeben:
-- **Aktionen:** `Kopiert`, `V-recodiert`, `A-recodiert`, `VA-recodiert`.
-- **Farbmetriken (Größe):** **Grün** = Speicherplatz erfolgreich eingespart / **Rot** = Datei vergrößert.
-- **Farbmetriken (VMAF):** **Grün** = Exzellent (≥ 93) / **Gelb** = Akzeptabel (88-92) / **Rot** = Qualitätsverlust (< 88).
+- **Ziel 1280 px statt 1920 px:** AVI-Quellen sind fast immer SD-Material – das Hochskalieren auf 1080p kostete nur Rechenzeit ohne echten Qualitätsgewinn.
+- Filterkette: Deinterlacing (falls nötig) → `hqdn3d` Rauschunterdrückung → `scale=1280:-2` → `cas` (Contrast Adaptive Sharpening).
+- **Helligkeitskorrektur auch für AVI:** Überwiegend dunkle AVI-Dateien erhalten ebenfalls eine CRF-Senkung.
 
-### 🛡️ Mediaserver-Schutz & Sicherheit
-- **Jellyfin/Emby-Integration:** Während der Verarbeitung einer Videodatei wird im entsprechenden Verzeichnis temporär eine `.embyignore`-Datei erstellt. Das verhindert, dass Mediaserver die unvollständige Datei mitten im Konvertierungsprozess einlesen. Nach Abschluss wird die Datei sauber bereinigt.
-- **Fehler-Validierung:** Bei Fehlern im Transcoding wird die fehlerhafte Ausgabedatei sofort gelöscht (Ausnahme: Beschädigte `.avi`-Dateien werden zu Analysezwecken einbehalten).
-- **Verlustfreier Metadaten-Schluss:** Jede Datei erhält die finalen Tags `LUFS`, `gained` und `normalized=true`.
+### 💾 NVIDIA & AMD Encoder-Verbesserungen
+- **NVIDIA:** `-tune hq`, VBR mit `-cq`-Qualitätsziel und `-multipass fullres` für genauere Bitratenverteilung (Turing+).
+- **AMD:** `-vbaq` (Variable Block-Adaptive Quantization) und `-high_motion_quality_boost_enable` für bessere Qualität in schnellen Szenen. QVBR-Level wird automatisch gespiegelt (51 = beste Qualität).
+
+---
+
+## 🎬 Werkzeug 1: Auto Video Transcoder
+
+**Skript:** [`Auto Video Transcode noch schneller mit helligkeitsmessung.ps1`](./Auto%20Video%20Transcode%20noch%20schneller%20mit%20helligkeitsmessung.ps1)
+
+### Hauptfunktionen im Überblick
+
+#### ⚡ Parallele Tag-Prüfung
+- **Bis zu 8 Threads gleichzeitig** (`ForEach-Object -Parallel`) zur Vorab-Prüfung des Normalisierungs-Status.
+- Bereits normalisierte MKV-Dateien (erkennbar am Metadaten-Tag `NORMALIZED=true` via `mkvextract`) werden sofort übersprungen.
+
+#### 🎮 GPU-Beschleunigung
+- **Automatische GPU-Erkennung** via WMI/CIM + FFmpeg-Encoder-Abgleich.
+- **NVIDIA:** `hevc_nvenc` mit `hq`-Preset · **AMD:** `hevc_amf` mit `quality`-Preset.
+- **Fallback** auf CPU-Encoder `libx265`, falls keine kompatible GPU vorhanden.
+- **AV1-Sicherheitsnetz:** Hardware-Dekodierung wird bei AV1-Quellen deaktiviert (Stabilität).
+
+#### 🧠 Adaptive Transkodierung
+- Automatische Modernisierung veralteter Formate (XviD, DivX, H.264) → **HEVC (H.265)**.
+- **Serien-Erkennung** (`SxxExx`): CRF 20 für Serien, automatisches Downscaling auf 720p bei Auflösungen > 720p.
+- **Filme:** CRF 18 als Standard.
+- **Größen-Check:** Recode nur wenn die Datei > 150 % der erwarteten Größe für ihre Laufzeit ist (MB/s pro Megapixel, kalibriert für Film & Serie).
+
+#### 🎯 VMAF-Qualitätsmessung & Auto-Retry
+- VMAF-Direktvergleich zwischen Quelle und Ausgabe (`n_subsample=5` – jeder 5. Frame, ~80 % schneller).
+- Automatischer Re-Recode bei Score < Schwelle minus Toleranz (Standard: 93 - 1.5).
+- Sicherung der bisherigen Ausgabe als `.backup` vor jedem Retry.
+
+#### 🎥 Proaktive Interlace- & FPS-Stabilisierung
+- `idet`-Analyse (1500 Frames) → echtes Deinterlacing via `bwdif` bei Bedarf.
+- FPS-Capping auf **25 FPS** (PAL-Kompatibilität) bei Videos > 25.1 FPS.
+- **Bit-Depth-Sanierung:** Nicht-8-Bit → standardisiertes HEVC 8-Bit.
+
+#### 🔊 Professionelle Audionormalisierung (EBU R128)
+- LUFS-Messung per `ebur128`, Zielwert konfigurierbar (Standard: **-18 LUFS**).
+- Audio-Recode nur bei Abweichung > ±0.2 dB – sonst verlustfreie Kopie.
+- AAC-Encoding mit dynamischer Bitrate (`libfdk_aac`-Kompatibilität / nativer AAC).
+
+#### 🛑 Hang-Detection & Prozessüberwachung
+- Asynchrone Überwachung aller FFmpeg-Prozesse im 10-Sekunden-Takt.
+- **120-Sekunden-Timeout** für Analyse-Funktionen, **300-Sekunden-Timeout** für Encode/VMAF.
+- Beendet blockierte Prozesse gezielt per PID (via `taskkill` statt `.Kill()`, robuster bei GPU-Deadlocks).
+
+#### 🛡️ Mediaserver-Schutz
+- Automatische `.embyignore`-Erstellung während der Verarbeitung (Jellyfin/Emby).
+- Fehlerhafte Ausgabedateien werden verworfen (AVI-Analyse-Ausnahme).
+- Finale Metadaten: `LUFS`, `gained`, `normalized=true`.
+
+#### 📊 Farbkodierte Statistiktabelle
+- Spalten: Datei, Aktion, Quelle/Ziel (MB), Ersparnis (MB/%), VMAF.
+- Grün = eingespart, Rot = vergrößert · VMAF: Grün ≥ 93, Gelb 88–92, Rot < 88.
+- Gesamtsummenzeile mit durchschnittlichem VMAF und Gesamtersparnis (MB + GB).
+
+---
+
+## 📺 Werkzeug 2: Serien-Umbenenner
+
+**Skript:** [`Serien umbenenner.ps1`](./Serien%20umbenner.ps1)
+
+Dieses Werkzeug automatisiert das Umbenennen von Serien-Dateien durch **Online-Abgleich mit fernsehserien.de**:
+
+### Hauptfunktionen
+
+| Funktion | Beschreibung |
+|---|---|
+| 🔍 **Online-Suche** | Automatische Suche auf fernsehserien.de, inkl. Umlaut-Normalisierung (Ä→AE) und Fallback-Suche bei Null-Treffern. |
+| 🖼️ **Grafische Auswahl-GUI** | Bei mehreren Treffern öffnet sich ein Fenster mit Serienposter-Vorschau. |
+| 📋 **Episodenführer-Abgleich** | Parst den Episodenführer und erkennt Episoden über Staffel-/Episodennummer (`SxxExx`), absolute Nummer oder Titelähnlichkeit (Levenshtein-Distanz). |
+| 🏷️ **Scene-Tag-Bereinigung** | Entfernt automatisch Scene-Tags (PROPER, REPACK, 1080p, BluRay, x265, German, DL, ...) aus Dateinamen. |
+| 🧠 **Lernender Tag-Filter** | GUI zur Auswahl zusätzlicher Tags, die dauerhaft in `CustomSceneTags.txt` gespeichert und zukünftig entfernt werden. |
+| 💾 **Lokaler Serien-Cache** | Speichert Serieninformationen in `Serieninfo.txt` – erneute Läufe nutzen den lokalen Cache statt erneuter Online-Abfragen. |
+| ↩️ **Automatischer Nachlauf** | Fehlgeschlagene Dateien werden im 2. Durchlauf mit erweiterter Suche (alle Treffer) erneut verarbeitet. |
+| 🔢 **Intelligente Sortierung** | Sortierbare ListView mit benutzerdefiniertem Comparer (Text + Zahlen) in der Episoden-Auswahl. |
+| 📁 **Massenumbenennung** | Verarbeitet komplette Ordnerstrukturen rekursiv (.mkv + .mp4). |
+
+### Namensschema
+```
+Neue Datei:    Serie - S01E01 - Episodentitel.mkv
+```
 
 ---
 
 ## 🛠️ Anforderungen
 
-1. **PowerShell 7.0+** – Zwingend erforderlich für die parallele Verarbeitung (`ForEach-Object -Parallel`).
-2. **FFmpeg** – Kompiliert mit `libx265`, `libvmaf`, `hevc_nvenc`, `hevc_amf` und `libfdk_aac`. Der Pfad muss in `$ffmpegPath` hinterlegt werden.
-3. **MKVToolNix** – `mkvextract.exe` wird zwingend für die Tag-Prüfung benötigt. Der Pfad muss in `$mkvextractPath` hinterlegt werden.
-4. **Hardware (Optional):** NVIDIA- oder AMD-Grafikkarte für die Nutzung der schnellen Hardware-Encoder.
+| Komponente | Version / Hinweis |
+|---|---|
+| **PowerShell** | Version **7.0+** (zwingend für `ForEach-Object -Parallel`) |
+| **FFmpeg** | Mit `libx265`, `libvmaf`, `hevc_nvenc`, `hevc_amf`, `libfdk_aac` (Pfad in `$ffmpegPath` konfigurieren) |
+| **MKVToolNix** | `mkvextract.exe` für die Tag-Prüfung (Pfad in `$mkvextractPath` konfigurieren) |
+| **GPU (optional)** | NVIDIA- oder AMD-Grafikkarte für Hardware-Encoding |
+
+**Serien-Umbenenner:** Benötigt Internetzugang zu `fernsehserien.de` und PowerShell 5.1+ (Windows Forms GUI).
 
 ---
 
-## ⚙️ Konfiguration
+## ⚙️ Konfiguration (Transcoder)
 
-Alle wichtigen Parameter lassen sich im `#region Konfiguration`-Block am Anfang des Skripts feintunen:
+Alle wichtigen Parameter befinden sich im `#region Konfiguration`-Block:
 
 | Variable | Standardwert | Beschreibung |
 |---|---|---|
-| `$ffmpegPath` | `"F:\media-autobuild_suite-master\local64\bin-video\ffmpeg.exe"` | Vollständiger Pfad zur `ffmpeg.exe`. |
-| `$mkvextractPath` | `"C:\Program Files\MKVToolNix\mkvextract.exe"` | Vollständiger Pfad zur `mkvextract.exe`. |
-| `$targetLoudness` | `-18` | Ziel-Lautheit in LUFS für die Normalisierung. |
-| `$extensions` | `@('.mkv', '.mp4', '.avi', '.m2ts')` | Array der im Ordnerscan berücksichtigen Video-Formate. |
-| `$useHardwareAccel` | `$true` | Aktiviert die GPU-Encoder-Suche (`$false` erzwingt CPU `libx265`). |
-| `$encoderPreset` | `'medium'` | x265-Geschwindigkeits-Preset für den CPU-Fallback. |
-| `$crfTargetm` | `18` | Standard-CRF-Wert für Filme (SDR). |
-| `$crfTargets` | `20` | Standard-CRF-Wert für Serien (SDR). |
-| `$qualitaetFilm` | `"hoch"` | Qualitätsprofil für den Größen-Check bei Filmen (`niedrig`, `mittel`, `hoch`, `sehrhoch`). |
-| `$qualitaetSerie` | `"hoch"` | Qualitätsprofil für den Größen-Check bei Serien (`niedrig`, `mittel`, `hoch`, `sehrhoch`). |
-| `$vmafStartSec` | `90` | Startzeitpunkt des VMAF-Vergleichs (überspringt Intros). |
-| `$vmafDurationSec` | `300` | Dauer des VMAF-Vergleichsfensters (5 Minuten). |
-| `$vmafAutoRetry` | `$true` | Aktiviert den automatischen Re-Recode bei ungenügendem VMAF. |
-| `$vmafMinScore` | `93` | Angestrebter Mindest-VMAF-Score. |
-| `$vmafTolerance` | `1.5` | Erlaubte Abweichung. Ein Score bis `91.5` löst hier noch keinen Retry aus. |
-| `$vmafMaxRetries` | `2` | Maximale Anzahl an Re-Recode-Versuchen pro Datei. |
+| `$ffmpegPath` | `"F:\media-autobuild_suite\local64\bin-video\ffmpeg.exe"` | Pfad zur `ffmpeg.exe` |
+| `$mkvextractPath` | `"C:\Program Files\MKVToolNix\mkvextract.exe"` | Pfad zur `mkvextract.exe` |
+| `$targetLoudness` | `-18` | Ziel-Lautheit in LUFS |
+| `$extensions` | `@('.mkv', '.mp4', '.avi', '.m2ts')` | Verarbeitete Video-Formate |
+| `$enableCalibrationLogging` | `$false` | Aktiviert das JSON-Kalibrierungs-Logging (⭐ NEU) |
+| `$useHardwareAccel` | `$true` | GPU-Encoder-Suche aktiv (`$false` = CPU `libx265`) |
+| `$encoderPreset` | `'medium'` | CPU-Preset für den Fallback |
+| `$crfTargetm` | `18` | CRF-Zielwert für Filme |
+| `$crfTargets` | `20` | CRF-Zielwert für Serien |
+| `$qualitaetFilm` / `$qualitaetSerie` | `"hoch"` | Qualitätsprofil für den Größen-Check (`niedrig`, `mittel`, `hoch`, `sehrhoch`) |
+| `$vmafStartSec` | `90` | Startpunkt des VMAF-Vergleichs |
+| `$vmafDurationSec` | `300` | VMAF-Analysedauer (5 Minuten) |
+| `$vmafAutoRetry` | `$true` | Auto-Retry bei zu niedrigem VMAF aktiv |
+| `$vmafMinScore` | `93` | Mindest-VMAF-Score |
+| `$vmafTolerance` | `1.5` | Erlaubte Abweichung vor Retry-Auslösung |
+| `$vmafMaxRetries` | `2` | Maximale Re-Recode-Versuche |
 
 ---
 
 ## 🚀 Anwendung
 
-### Skript ausführen
-1. Öffnen Sie PowerShell 7+ oder Windows PowerShell.
-2. Führen Sie das Skript aus: `'C:\Pfad\Auto Video Transcode noch schneller mit helligkeitsmessung.ps1'`
-3. Es öffnet sich ein Dialogfenster. Wählen Sie den Ordner mit Ihrer Videosammlung aus.
-4. Bestätigen Sie mit "OK".
-5. **Das war's!** Beobachten Sie, wie Ihr Computer Ihre Mediathek auf das nächste Level hebt.
+### Auto Video Transcoder
+1. Öffnen Sie PowerShell 7+.
+2. Führen Sie das Skript aus:
+   ```powershell
+   & 'C:\Pfad\Auto Video Transcode noch schneller mit helligkeitsmessung.ps1'
+   ```
+3. Wählen Sie den Ordner mit Ihrer Videosammlung.
+4. **Fertig.** Das Skript analysiert, konvertiert, normalisiert und validiert Ihre gesamte Sammlung.
+
+### Serien-Umbenenner
+1. Öffnen Sie PowerShell.
+2. Führen Sie das Skript aus:
+   ```powershell
+   & 'C:\Pfad\Serien umbenenner.ps1'
+   ```
+3. Wählen Sie den Ordner mit Ihren Serien-Dateien.
+4. Das Skript sucht jede Serie online, gleicht die Episoden ab und benennt die Dateien um.
 
 ---
 
 ## ⚠️ Haftungsausschluss
 
-Dieses Skript löscht die Originaldateien nach einer erfolgreichen Konvertierung. Es wird dringend empfohlen, **vor der ersten Anwendung ein Backup Ihrer Daten zu erstellen** oder das Skript zunächst mit Kopien Ihrer Dateien in einem Testordner auszuführen.
+Der Transcoder löscht die Originaldateien nach erfolgreicher Konvertierung:
+- Erstellen Sie **unbedingt ein Backup** Ihrer Sammlung.
+- Testen Sie das Skript zunächst mit Kopien Ihrer Dateien.
 
 **Die Nutzung erfolgt auf eigene Gefahr.**
 
@@ -154,34 +227,41 @@ Dieses Skript löscht die Originaldateien nach einer erfolgreichen Konvertierung
 
 | Feature | Status | Hinweise |
 |---|---|---|
-| GPU-Beschleunigung (NVIDIA/AMD) | ✅ Fertig | hevc_nvenc, hevc_amf, libx265 Fallback |
-| Metadaten-Analyse | ✅ Fertig | Codec, Auflösung, Audio, Interlace, HDR, Bittiefe, FPS |
-| Serien-Erkennung | ✅ Fertig | SxxExx Pattern-Matching, automatisches 720p-Downscaling |
-| Normalisierungs-Checking | ✅ Fertig | Parallele Überprüfung mit Fortschritts-Tracking |
-| Emby/Jellyfin-Integration | ✅ Fertig | Automatische .embyignore Erstellung & Bereinigung |
-| Video-Transkodierung | ✅ Fertig | HEVC-Encoding mit CRF-Optimierung |
-| Audio-Normalisierung | ✅ Fertig | EBUR128-Messung, AAC-Kodierung (libfdk_aac), VBR-Optimierung |
-| AVI-Spezialbehandlung | ✅ Fertig | Deinterlace, Denoise, Upscale auf 1080p, Sharpen |
-| **Helligkeitsanalyse** | ✅ Fertig | **9 Segmente-YAVG, Mehrheitsentscheid, automatische CRF-Anpassung ⭐** |
-| FPS-Stabilisierung | ✅ Fertig | Auto-Cap >25 → 25 fps für PAL-Kompatibilität |
-| **Hang-Detection** | ✅ Fertig | **300 Sek Timeout, verhindert hängende Prozesse ⭐**|
-| VMAF-Qualitätsmessung | ✅ Fertig | n_subsample=5, konfigurierbare Zeitspanne |
-| VMAF Auto-Retry | ✅ Fertig | Bis zu 2 Re-Recode-Versuche, Backup/Restore-Sicherung, Toleranzzone |
-| Farbkodierte Statistik | ✅ Fertig | Aktion, Größen, Ersparnis, VMAF pro Datei + Summenzeile |
-| Error Handling & Logging | ✅ Fertig | Integritätsprüfung, detaillierte Logs pro Datei |
-| Dialogfenster im Vordergrund | ✅ Fertig | Zuverlässig auch bei Start aus VSCode |
+| **Helligkeitsanalyse + CRF-Anpassung** | ✅ Fertig | 9 Segmente, Mehrheitsentscheidung, HDR-Schutz (⭐ NEU) |
+| **Kalibrierungs-Logging (JSON)** | ✅ Fertig | MB/s & MB/s pro Megapixel (⭐ NEU) |
+| **Dynamische HWACCEL-Auswahl** | ✅ Fertig | Herstellerspezifische Prioritäten (⭐ NEU) |
+| **Adaptives AAC-Bitrate-Management** | ✅ Fertig | Profil + Bitrate abhängig von Quelle & Kanälen (⭐ NEU) |
+| **AVI-Restaurierung 720p** | ✅ Fertig | Denoise, Scale, Sharpen + Helligkeitskorrektur (⭐ NEU) |
+| VMAF-Qualitätsmessung | ✅ Fertig | JSON-Log-Auswertung, n_subsample=5 |
+| VMAF Auto-Retry | ✅ Fertig | Backup/Restore, Toleranzzone, CRF-Stepping |
+| GPU-Beschleunigung | ✅ Fertig | NVIDIA (vbr+cq+multipass), AMD (qvbr+vbaq), CPU-Fallback |
+| Parallele Tag-Prüfung | ✅ Fertig | 8 Threads, `NORMALIZED=true`-Erkennung |
+| Serien-Erkennung | ✅ Fertig | SxxExx, 720p-Downscale, CRF-Unterschiede |
+| Audio-Normalisierung (EBU R128) | ✅ Fertig | Ziel-LUFS -18, ±0.2 dB Toleranz |
+| Interlace- & FPS-Stabilisierung | ✅ Fertig | bwdif, 25-FPS-Cap, 8-Bit-Sanierung |
+| Hang-Detection | ✅ Fertig | 120s / 300s Timeouts, taskkill |
+| Mediaserver-Schutz | ✅ Fertig | .embyignore, Fehler-Validierung, Metadaten |
+| Farbkodierte Statistik | ✅ Fertig | Summenzeile, VMAF-Farbcodierung |
+| **Serien-Umbenenner (eigenständig)** | ✅ Fertig | Online-Abgleich, GUI, Scene-Tags, Cache (⭐ NEU) |
 
 ---
 
-## 🎯 Optimiert für:
+## 🎯 Optimiert für
 
-- **4K Blu-rays** → HEVC 8-Bit/10-Bit + AAC, VMAF ≥93
-- **Serien (Netflix/Amazon/HBO)** → HEVC, CRF20 + Serien-Namensnormalisierung  
-- **Filme** → HEVC CRF18 bei hohem Bitbudget, HDR10 + Dolby Vision
-- **Streaming-Sets** (Jellyfin) → HEVC 4:2:0 C500 für optimale Kompatibilität
+- **4K-Blu-rays** → HEVC 8-Bit/10-Bit + AAC, VMAF ≥ 93
+- **Serien** → HEVC CRF 20, 720p-Downscale, saubere Dateinamen
+- **Filme** → HEVC CRF 18, HDR-Schutz bei der Helligkeitsanalyse
+- **Alte AVI-Schätze** → Deinterlace, Denoise, Upscale, Sharpen
+- **Jellyfin/Emby-Setups** → Mediaserver-kompatibel, automatische Ignore-Dateien
 
 ---
 
 ## 📱 Unterstützung & Feedback
 
-Dieses Skript ist Teil der [Powershell-Video-Transcoder](https://github.com/Maximus1/Powershell-Video-Transcoder)-Sammlung auf GitHub. Für Fragen, Features oder Issues, öffnen Sie bitte ein [Issue im Repository](https://github.com/Maximus1/Powershell-Video-Transcoder/issues).
+Für Fragen, Feature-Wünsche oder Issues öffnen Sie bitte ein [Issue im Repository](https://github.com/Maximus1/Powershell-Video-Transcoder/issues).
+
+---
+
+## 📄 Lizenz
+
+Dieses Projekt ist unter der **MIT-Lizenz** veröffentlicht. Weitere Informationen finden Sie in der [LICENSE](./LICENSE)-Datei. Mitwirkende werden gebeten, den [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) zu respektieren.
