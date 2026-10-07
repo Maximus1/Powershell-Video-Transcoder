@@ -24,9 +24,9 @@ $Nvidia_quality = "hq" # NVIDIA Preset fuer hohe Qualitaet.
 # Encoder-Preset beeinflusst die Kodierungsgeschwindigkeit vs. Kompression (z.B. 'medium', 'slow').
 $encoderPreset = 'medium' # Standard-Preset fuer libx265.
 # CRF-Wert (Constant Rate Factor) fuer Filme. Niedrigere Werte bedeuten hoehere Qualitaet.
-$crfTargetm = 18 # CRF fuer Filme
+$crfTargetm = 16 # CRF fuer Filme (von 18 auf 16 gesenkt fuer hoehere Qualitaet)
 # CRF-Wert fuer Serien.
-$crfTargets = 20 # Etwas hoeherer CRF fuer Serien zur besseren Kompression.
+$crfTargets = 18 # CRF fuer Serien (von 20 auf 18 gesenkt fuer hoehere Qualitaet)
 # Der Ziel-Videocodec fuer die Transkodierung.
 $targetVideoCodec = 'HEVC' # Alle Videos werden in HEVC (H.265) kodiert.
 # Zieldateiendung fuer alle verarbeiteten Dateien.
@@ -641,14 +641,14 @@ function Get-VideoBrightnessInfo {
         [bool]$IsHDR
     )
 
-    # Bei HDR-Material sind SDR-Helligkeitswerte irreführend: HDR-Content sieht als SDR
+    # Bei HDR-Material sind SDR-Helligkeitswerte irrefuehrend: HDR-Content sieht als SDR
     # dekodiert immer tiefdunkel aus, auch wenn er es nicht ist. Analyse daher ueberspringen.
     if ($IsHDR) {
-        Write-Host "  Helligkeitsanalyse: Übersprungen (HDR-Inhalt erkannt – Analyse wäre irreführend)." -ForegroundColor DarkGray
+        Write-Host "  Helligkeitsanalyse: Uebersprungen (HDR-Inhalt erkannt – Analyse waere irrefuehrend)." -ForegroundColor DarkGray
         return $null
     }
 
-    Write-Host "  Starte Helligkeitsanalyse (9 Segmente à 15s, verteilt über Filmlänge)..." -ForegroundColor Cyan
+    Write-Host "  Starte Helligkeitsanalyse (9 Segmente à 15s, verteilt ueber Filmlänge)..." -ForegroundColor Cyan
 
     try {
         # Analysebereich: 90s bis 82% der Gesamtdauer.
@@ -658,11 +658,11 @@ function Get-VideoBrightnessInfo {
         $rangeEnd   = [math]::Max([math]::Round($Duration * 0.82), $rangeStart + 60)
 
         if ($rangeStart -ge $rangeEnd) {
-            Write-Host "  Helligkeitsanalyse: Video zu kurz fuer sinnvolle Analyse, übersprungen." -ForegroundColor DarkGray
+            Write-Host "  Helligkeitsanalyse: Video zu kurz fuer sinnvolle Analyse, uebersprungen." -ForegroundColor DarkGray
             return $null
         }
 
-        # 9 Segmente gleichmäßig über den Analysebereich verteilen (ungerade Zahl für saubere Mehrheit).
+        # 9 Segmente gleichmäßig ueber den Analysebereich verteilen (ungerade Zahl fuer saubere Mehrheit).
         # CRF wird nur gesenkt wenn die Mehrheit (5+/9) der Segmente dunkel ist – also das Video
         # ueberwiegend dunkel ist, nicht nur einzelne Szenen.
         # fps=1 pro Segment: 15 Werte x 9 = max. 135 Gesamtsamples.
@@ -874,7 +874,7 @@ function Get-AacAudioEncodingArgs {
 
     $codecFamily = if ($SourceInfo.AudioCodecFamily) { $SourceInfo.AudioCodecFamily } else { $SourceInfo.AudioCodec }
     # aac_low ist der konservativste AAC-Profileintrag: er bleibt kompatibel, erzeugt keine unnötig große Datei
-    # und ist für die meisten Transcodes eine gute Balance aus Qualität und Größe.
+    # und ist fuer die meisten Transcodes eine gute Balance aus Qualität und Größe.
     $audioprofile = 'aac_low'
     $bitrateK = if ($AudioChannels -le 1) { 96 } elseif ($AudioChannels -eq 2) { 128 } else { 160 }
 
@@ -1079,7 +1079,7 @@ function Set-VolumeGain {
 
             # Encoder-spezifische Qualitaetseinstellungen
             $qualityValue = if ($sourceInfo.IsSeries) { $crfTargets } else { $crfTargetm }
-            $cqpValue = [math]::Round($qualityValue * 1.2)
+            $cqpValue = [math]::Round($qualityValue * 1.)
             $cqValue  = [math]::Round($qualityValue * 1.2)
             # AMD QVBR-Skala ist invertiert (1=schlechteste, 51=beste Qualitaet) -> spiegeln
             $qvbrLevel = [math]::Min(51, [math]::Max(1, 51 - $cqpValue))
@@ -1105,7 +1105,7 @@ function Set-VolumeGain {
             }
 
             if ($videoEncoder -eq "hevc_amf") {
-                Write-Host "Qualitaets-Ziel (AMD QVBR-Level, 51=beste Qualitaet): $qvbrLevel" -ForegroundColor Cyan
+                Write-Host "Qualitaets-Ziel (AMD vbr_peak, 51=beste Qualitaet): $qvbrLevel" -ForegroundColor Cyan
             }
             elseif ($videoEncoder -eq "hevc_nvenc") {
                 Write-Host "Qualitaets-Ziel (NVIDIA CQ): $cqValue" -ForegroundColor Cyan
@@ -1115,21 +1115,39 @@ function Set-VolumeGain {
             }
 
             if ($videoEncoder -eq "hevc_amf") {
-                # EXPERIMENTELL: -preanalysis true aktiviert das komplette AMF-PreAnalysis-Modul
-                # zum ersten Mal wirklich (pa_*-Parameter wirken laut AMD-Doku nur mit preanalysis=true).
-                # Fuer die RX 9070 XT (RDNA4) existiert ein dokumentierter Bugreport zu AMF-Encoder-
-                # Initialisierungsfehlern bei aktivem PreAnalysis. -tiles/-bf/-b_ref_mode bleiben bewusst
-                # draussen (bestaetigte Hang-Ursachen aus frueheren Tests). Bei erneuten Haengern zuerst
-                # -preanalysis, -pa_scene_change_detection_enable und -pa_activity_type wieder entfernen.
+                # Zielbitrate aus der kalibrierten MB/s/MP-Rate ableiten (dieselbe Tabelle wie
+                # Measure-ExpectedSizeMB, aus echten CalibrationData.json-Werten kalibriert),
+                # skaliert auf die tatsaechlich verwendete Qualitaetsstufe (nach Helligkeits-/
+                # Retry-Anpassung). Faustregel ~10% Bitratenaenderung pro CRF-Punkt (Naeherung
+                # aus typischen Raten-Distortion-Kurven, nicht AMF-spezifisch verifiziert).
+                $baseTierRateMBps = Measure-ExpectedSizeMB -durationSeconds 1 -isSeries $sourceInfo.IsSeries -resolution $sourceInfo.Resolution -logDatei $logDatei
+                $baseTargetKbps = [math]::Round($baseTierRateMBps * 8000)
+                $baseCrfForTier = if ($sourceInfo.IsSeries) { $crfTargets } else { $crfTargetm }
+                $crfDelta = $baseCrfForTier - $qualityValue
+                $targetBitrateKbps = [math]::Max(200, [math]::Round($baseTargetKbps * [math]::Pow(1.1, $crfDelta)))
+                $maxrateKbps = [math]::Round($targetBitrateKbps * 1.75)
+                $bufsizeKbps = $maxrateKbps
+
+                Write-Host "Qualitaets-Ziel (AMD vbr_peak): Ziel ${targetBitrateKbps}k / Max ${maxrateKbps}k / Puffer ${bufsizeKbps}k" -ForegroundColor Cyan
+                "`n==== AMD vbr_peak Ziel: ${targetBitrateKbps}k / Max ${maxrateKbps}k / Puffer ${bufsizeKbps}k ====" | Add-Content -LiteralPath $logDatei
+
+                # PreAnalysis (inkl. TAQ fuer Bewegung, Lookahead, Preencode) aktiv - RX-9070-XT-
+                # PreAnalysis-Init-Bugrisiko bewusst in Kauf genommen fuer bessere Bewegungsqualitaet.
+                # -tiles/-bf/-b_ref_mode/-pa_scene_change_detection_enable bleiben bewusst draussen
+                # (bestaetigte Hang-Ursachen aus frueheren Tests).
                 $ffmpegArguments += @(
                 "-c:v", $videoEncoder,
                 "-pix_fmt", "yuv420p",
                 "-quality", $amd_quality,
-                "-rc", "qvbr",
-                "-qvbr_quality_level", $qvbrLevel,
-                "-b:v", "0",
+                "-rc", "vbr_peak",
+                "-b:v", "${targetBitrateKbps}k",
+                "-maxrate", "${maxrateKbps}k",
+                "-bufsize", "${bufsizeKbps}k",
                 # Pre-Analysis & Szene-Optimierung
-                #"-preanalysis", "true",
+                "-preanalysis", "true",
+                "-preencode", "true",
+                "-pa_taq_mode", "2",
+                "-pa_lookahead_buffer_depth", "40",
                 #"-pa_scene_change_detection_enable", "true",
                 #"-pa_activity_type", "1",
                 # Adaptive Bitraten- & Qualitäts-Booster
@@ -1350,17 +1368,26 @@ function Set-VolumeGain {
             # Eingabedatei
             $newArgs += @("-i", "`"$($filePath)`"")
 
-            # CPU Video-Optionen: qualityValue hier bereits durch Helligkeitskorrektur angepasst (falls zutreffend)
+            # CPU-Fallback-Parameter replizieren AMD AMF VBR_peak-Betrieb fuer vergleichbare Qualität/Größe
+            # Verwendet kalibrierte Bitraten-Ziele und AMD-ähnliche PreAnalysis für bessere Qualität
+            $baseTierRateMBps = Measure-ExpectedSizeMB -durationSeconds 1 -isSeries $sourceInfo.IsSeries -resolution $sourceInfo.Resolution -logDatei $logDatei
+            $baseTargetKbps = [math]::Round($baseTierRateMBps * 8000)
+            $baseCrfForTier = if ($sourceInfo.IsSeries) { $crfTargets } else { $crfTargetm }
+            $crfDelta = $baseCrfForTier - $qualityValue
+            $targetBitrateKbps = [math]::Max(200, [math]::Round($baseTargetKbps * [math]::Pow(1.1, $crfDelta)))
+            $maxrateKbps = [math]::Round($targetBitrateKbps * 1.75)
+            $bufsizeKbps = $maxrateKbps
+            
+            # AMD-ähnliche x265-Parameter (hochwertige Einstellungen, die AMF-Skalierung replizieren)
             $newArgs += @(
-                "-c:v", "libx265"
+                "-rc", "vbr_peak"
             )
-            if ($needsReencodeDueToBitDepth -eq $true) {
-                $newArgs += @("-pix_fmt", "yuv420p")
-            }
             $newArgs += @(
-                "-preset", $encoderPreset,
-                "-crf", $qualityValue,
-                "-x265-params", "log-level=warning:nr=0:aq-mode=1:frame-threads=12:qcomp=0.7",
+                "-b:v", "${targetBitrateKbps}k",
+                "-maxrate", "${maxrateKbps}k",
+                "-bufsize", "${bufsizeKbps}k",
+                # AMD-ähnliche PreAnalysis (wie AMF) - verwendet pre-analysis in x265-params
+                "-x265-params", "log-level=warning:aq-mode=4:psy-rd=1.5:psy-rdoq=0.7:rd=3:bframes=8:ref=4:deblock=-1,-1:me=umh:subme=5:rdoq-level=1:rc-lookahead=30:frame-threads=12:pools=6:pre-analysis=true",
                 "-max_muxing_queue_size", "1024"
             )
 
@@ -1521,33 +1548,33 @@ function Get-VmafScore {
 
     # Eindeutiger Temp-Pfad fuer das VMAF-JSON-Log (siehe unten: JSON-Log ist zuverlaessiger als
     # stderr-Textparsing, besonders auf Windows). Guid vermeidet Kollisionen bei evtl. parallelen/
-    # wiederholten Laeufen. Für den libvmaf-Filter-String muessen Backslashes zu Forward-Slashes
+    # wiederholten Laeufen. Fuer den libvmaf-Filter-String muessen Backslashes zu Forward-Slashes
     # und der Laufwerksbuchstaben-Doppelpunkt zu "\:" escaped werden (Windows-spezifische Eigenart
     # der libvmaf-Optionssyntax, sonst wird der Pfad als zusaetzliche Option fehlinterpretiert).
     $vmafJsonLogPath = Join-Path ([System.IO.Path]::GetTempPath()) "vmaf_$([Guid]::NewGuid().ToString('N')).json"
-    $vmafJsonLogPathEscaped = ($vmafJsonLogPath -replace '\\', '/') -replace ':', '\:'
+    $vmafJsonLogPathEscaped = ($vmafJsonLogPath -replace '\\', '/') -replace ':', '\\:'
     $vmafLogOptions = ":log_path=${vmafJsonLogPathEscaped}:log_fmt=json"
 
     # Bei Resize/Force720p hat die Ausgabe eine andere Aufloesung als die Quelle.
     # libvmaf braucht identische Aufloesung -> Ausgabe auf Quellaufloesung hochskalieren
     # (Netflix-VMAF-Empfehlung, verifiziert: die kleinere/distorted Seite wird auf die Referenz
-    # hochskaliert, NICHT umgekehrt - das VMAF-Modell wurde genau so trainiert).
-    $vmafFilter = "[0:v]trim=start=${StartSec}:duration=${DurationSec},setpts=PTS-STARTPTS[ref];[1:v]trim=start=${StartSec}:duration=${DurationSec},setpts=PTS-STARTPTS[dist];[dist][ref]libvmaf=model=version=vmaf_v0.6.1:n_subsample=5:n_threads=$([Environment]::ProcessorCount)${vmafLogOptions}"
+# hochskaliert, NICHT umgekehrt - das VMAF-Modell wurde genau so trainiert).
+    $vmafFilter = "[0:v]trim=start=${StartSec}:duration=${DurationSec},setpts=PTS-STARTPTS[ref];[1:v]trim=start=${StartSec}:duration=${DurationSec},setpts=PTS-STARTPTS[dist];[dist][ref]libvmaf=model='version=vmaf_v0.6.1':n_subsample=5:n_threads=$([Environment]::ProcessorCount)${vmafLogOptions}"
     try {
         if (($sourceInfo.resize -eq $true -or $sourceInfo.Force720p -eq $true) -and $sourceInfo.Resolution -match "^(\d+)x(\d+)$") {
             $srcWidth  = $matches[1]
             $srcHeight = $matches[2]
             Write-Host "  VMAF: Resize/Force720p erkannt — skaliere Ausgabe auf Quellaufloesung (${srcWidth}x${srcHeight}) fuer Vergleich." -ForegroundColor Cyan
-            $vmafFilter = "[0:v]trim=start=${StartSec}:duration=${DurationSec},setpts=PTS-STARTPTS[ref];[1:v]trim=start=${StartSec}:duration=${DurationSec},scale=${srcWidth}:${srcHeight}:flags=bicubic,setpts=PTS-STARTPTS[dist];[dist][ref]libvmaf=model=version=vmaf_v0.6.1:n_subsample=5:n_threads=$([Environment]::ProcessorCount)${vmafLogOptions}"
+            $vmafFilter = "[0:v]trim=start=${StartSec}:duration=${DurationSec},setpts=PTS-STARTPTS[ref];[1:v]trim=start=${StartSec}:duration=${DurationSec},scale=${srcWidth}:${srcHeight}:flags=bicubic,setpts=PTS-STARTPTS[dist];[dist][ref]libvmaf=model='version=vmaf_v0.6.1':n_subsample=5:n_threads=$([Environment]::ProcessorCount)${vmafLogOptions}"
         }
         elseif ($sourceInfo.resize -eq $true -or $sourceInfo.Force720p -eq $true) {
-            Write-Host "  VMAF: Resize/Force720p erkannt, Quellaufloesung nicht lesbar — VMAF wird übersprungen." -ForegroundColor Yellow
+            Write-Host "  VMAF: Resize/Force720p erkannt, Quellaufloesung nicht lesbar — VMAF wird uebersprungen." -ForegroundColor Yellow
             return $null
         }
         Write-Host "  Starte VMAF-Messung (Start: ${StartSec}s, Dauer: ${DurationSec}s, n_subsample=5)..." -ForegroundColor Cyan
     }
     catch {
-        # Fehler bei der Schnellprüfung ignorieren und normal weitermachen
+        # Fehler bei der Schnellpruefung ignorieren und normal weitermachen
     }
 
     try {
@@ -2076,7 +2103,7 @@ function Get-OptimalHwaccel {
         [string]$FFmpegPath = "ffmpeg",
         [string]$SelectedEncoder
     )
-    # 1. Alle von FFmpeg unterstützen HW-Beschleuniger dynamisch abfragen
+    # 1. Alle von FFmpeg unterstuetzen HW-Beschleuniger dynamisch abfragen
     $rawAccels = try {
         & $FFmpegPath -hide_banner -hwaccels 2>&1 |
             Where-Object { $_ -notmatch "Hardware acceleration methods:" -and $_.Trim() -ne "" } |
@@ -2201,20 +2228,20 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
     $duration = $endTime - $startTime
     Write-Host "Dateiscan-Zeit: $($duration.TotalSeconds) Sekunden | $mkvFileCount Dateien zur Verarbeitung" -ForegroundColor Yellow
 
-    # --- Parallele Überprüfung der Normalisierungs-Tags ---
-    Write-Host "Starte parallele Überprüfung der Normalisierungs-Tags für $mkvFileCount Dateien..." -ForegroundColor Cyan
+    # --- Parallele Überpruefung der Normalisierungs-Tags ---
+    Write-Host "Starte parallele Überpruefung der Normalisierungs-Tags fuer $mkvFileCount Dateien..." -ForegroundColor Cyan
 
-    # Synchronisierter Zähler für den Fortschritt
+    # Synchronisierter Zähler fuer den Fortschritt
     $processedQueue = [System.Collections.Concurrent.ConcurrentQueue[int]]::new()
 
-    # Die Funktionsdefinition in einer Variablen speichern, um sie an die parallelen Threads zu übergeben.
+    # Die Funktionsdefinition in einer Variablen speichern, um sie an die parallelen Threads zu uebergeben.
     $TestIsNormalizedFuncDef = (Get-Content "function:\Test-IsNormalized").ToString()
 
     $normalizationResults = $mkvFiles | ForEach-Object -Parallel {
         # Die Funktion 'Test-IsNormalized' im Runspace des aktuellen Threads aus ihrer Textdefinition neu erstellen.
         ${function:Test-IsNormalized} = [ScriptBlock]::Create($using:TestIsNormalizedFuncDef)
 
-        # Die modifizierte Funktion aufrufen, die ein Objekt zurückgibt
+        # Die modifizierte Funktion aufrufen, die ein Objekt zurueckgibt
         # Wichtig: $using: wird benötigt, um auf Variablen außerhalb des parallelen Bereichs zuzugreifen.
         $res = Test-IsNormalized -file $_ -mkvextractPath $using:mkvextractPath
 
@@ -2222,23 +2249,23 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
         $localQueue = $using:processedQueue
         $localQueue.Enqueue(1)
         $remaining = $using:mkvFileCount - $localQueue.Count
-        Write-Host "`rNoch zu prüfen: $remaining Dateien... " -NoNewline -ForegroundColor Yellow
+        Write-Host "`rNoch zu pruefen: $remaining Dateien... " -NoNewline -ForegroundColor Yellow
 
         $res
     } -ThrottleLimit 8 # Die Anzahl der parallelen Threads, anpassen je nach CPU-Kernen
     Write-Host ""
 
-    # Ergebnisse der parallelen Verarbeitung auswerten, Listen füllen und dabei eine stabile Fortschrittsanzeige ausgeben.
+    # Ergebnisse der parallelen Verarbeitung auswerten, Listen fuellen und dabei eine stabile Fortschrittsanzeige ausgeben.
     $processedCounter = 0
     $totalResults = $normalizationResults.Count
     foreach ($result in $normalizationResults) {
         $processedCounter++
         $percent = ($processedCounter / $totalResults) * 100
-        Write-Progress -Activity "Werte Ergebnisse der Tag-Prüfung aus" -Status "Datei $processedCounter von $totalResults" -PercentComplete $percent
+        Write-Progress -Activity "Werte Ergebnisse der Tag-Pruefung aus" -Status "Datei $processedCounter von $totalResults" -PercentComplete $percent
 
         if ($result.IsNormalized) {
             $script:filesnorm += $result.FilePath
-            # Write-Host "Datei ist bereits normalisiert. Überspringe: $($result.FilePath)" -ForegroundColor DarkGray # Optional: Kann für eine saubere Ausgabe auskommentiert werden
+            # Write-Host "Datei ist bereits normalisiert. Überspringe: $($result.FilePath)" -ForegroundColor DarkGray # Optional: Kann fuer eine saubere Ausgabe auskommentiert werden
         } else {
             $script:filesnotnorm += $result.FilePath
             if ($result.Warning) {
@@ -2250,7 +2277,7 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
             }
         }
     }
-    Write-Progress -Activity "Werte Ergebnisse der Tag-Prüfung aus" -Completed
+    Write-Progress -Activity "Werte Ergebnisse der Tag-Pruefung aus" -Completed
     Write-Host "Bereits normalisiert (uebersprungen): $($script:filesnorm.Count) Dateien" -ForegroundColor DarkGray
 
     # Zweite Schleife: Verarbeitet nur die Dateien, die in der ersten Schleife als "nicht normalisiert" identifiziert wurden.
